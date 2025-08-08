@@ -24,11 +24,42 @@ Enhanced the standard GLM-4 model class to support MTP layers:
 Enhanced the GLM-4 MoE model class to better handle MTP tensors:
 - Improved `modify_tensors()` to properly map NextN layer tensor names
 
+### 4. src/llama-kv-cache-unified.cpp ⚠️ **KV Cache Fix**
+**CRITICAL**: Fixed KV cache handling for GLM-4 models with MTP layers:
+- Extended the GLM4_MOE-specific logic to also apply to GLM4 models with MTP layers
+- Now correctly excludes NextN/MTP layers from KV cache processing for both architectures:
+  ```cpp
+  if (model.arch == LLM_ARCH_GLM4_MOE || (model.arch == LLM_ARCH_GLM4 && hparams.nextn_predict_layers > 0)) {
+      n_layer_cache = hparams.n_layer - hparams.nextn_predict_layers;
+  }
+  ```
+
+### 5. src/llama-model.cpp ⚠️ **Model Loading Fixes**
+**CRITICAL**: Enhanced GLM-4 model parameter loading and tensor creation:
+- Added NextN prediction layers parameter loading for GLM4 architecture
+- Added proper model type detection for GLM-4.5-Air (47 layers with MTP)
+- Added NextN/MTP tensor loading with proper TENSOR_SKIP flags for NextN layers
+- Proper tensor structure mapping using `layer.nextn.*` members
+
+## KV Cache Impact and Resolution
+
+### ⚠️ **Problem Identified:**
+Multi-Token Prediction (MTP) layers in GLM-4 models create additional transformer layers that should NOT participate in the standard attention KV caching mechanism. Without proper handling:
+
+1. **Memory Issues**: KV cache would allocate unnecessary memory for MTP layers
+2. **Inference Errors**: Attempting to use KV cache with MTP layers could cause crashes
+3. **Performance Impact**: Incorrect layer counts affect memory management
+
+### ✅ **Solution Implemented:**
+1. **KV Cache Layer Count Fix**: Modified `llama-kv-cache-unified.cpp` to exclude MTP layers from cache calculations
+2. **Model Loading Fix**: Enhanced tensor loading in `llama-model.cpp` to properly handle MTP layers with skip flags
+3. **Parameter Loading**: Added NextN prediction layer parameter reading for GLM4 architecture
+
 ## Model Support
 
 The implementation now supports:
 - GLM-4 models with MTP layers (Glm4ForCausalLM)
-- GLM-4 MoE models with MTP layers (Glm4MoeForCausalLM)
+- GLM-4 MoE models with MTP layers (Glm4MoeForCausalLM)  
 - GLM-4v multimodal models (Glm4vForConditionalGeneration)
 
 The GLM-4.5-Air model hash is already configured:
@@ -45,8 +76,13 @@ The GLM-4.5-Air model hash is already configured:
   - Embedding projection (`eh_proj`)
   - Token embeddings (`embed_tokens`)
   - Input normalization (`enorm`)
-  - Hidden normalization (`hnorm`)
+  - Hidden normalization (`hnorm`)  
   - Shared head components (`shared_head_head`, `shared_head_norm`)
+
+### KV Cache Compatibility
+- **Automatic Detection**: Detects MTP layers and adjusts KV cache layer count
+- **Memory Optimization**: Excludes MTP layers from KV cache to save memory
+- **Inference Safety**: Prevents crashes during inference with MTP models
 
 ### Tensor Name Mapping
 The implementation correctly maps HuggingFace tensor names to GGUF format:
@@ -72,4 +108,14 @@ python test_glm4_mtp_conversion.py /path/to/glm4-model output.gguf --type f16
 - The block count is automatically adjusted when MTP layers are detected
 - Both standard GLM-4 and GLM-4 MoE models are supported
 - Visual components in GLM-4v models are ignored during conversion
+- **KV Cache**: MTP layers are properly excluded from KV cache processing
+- **Memory Safety**: MTP layer tensors are loaded but marked with TENSOR_SKIP flags
 - The implementation preserves backward compatibility with models without MTP layers
+
+## Testing
+
+After applying these changes, test with GLM-4.5-Air or other MTP-enabled GLM-4 models to ensure:
+1. Conversion completes without errors
+2. KV cache memory allocation is correct
+3. Inference runs without crashes
+4. Model outputs are coherent
