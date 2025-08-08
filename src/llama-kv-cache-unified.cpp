@@ -39,10 +39,8 @@ llama_kv_cache_unified::llama_kv_cache_unified(
     if (model.arch == LLM_ARCH_GEMMA3N) {
         n_layer_cache = 20;
     }
-    if (model.arch == LLM_ARCH_GLM4_MOE || (model.arch == LLM_ARCH_GLM4 && hparams.nextn_predict_layers > 0)) {
-        // GLM-4.5/GLM-4 with MTP: Only process up to last transformer layer, skip NextN/MTP layers
-        n_layer_cache = hparams.n_layer - hparams.nextn_predict_layers;
-    }
+    // Note: GLM4 and GLM4_MOE with NextN/MTP layers should use all layers including NextN layers
+    // The NextN/MTP layers are part of the model architecture and should be processed
 
     // create a context for each buffer type
     std::map<ggml_backend_buffer_type_t, ggml_context *> ctx_map;
