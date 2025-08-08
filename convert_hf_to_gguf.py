@@ -6769,6 +6769,14 @@ class JaisModel(TextModel):
 class Glm4Model(TextModel):
     model_arch = gguf.MODEL_ARCH.GLM4
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Check if this model has MTP layers and adjust block count accordingly
+        num_nextn_predict_layers = self.hparams.get("num_nextn_predict_layers", 0)
+        if num_nextn_predict_layers > 0:
+            self.block_count = self.hparams["num_hidden_layers"] + num_nextn_predict_layers
+            self.tensor_map = gguf.get_tensor_name_map(self.model_arch, self.block_count)
+
     def set_vocab(self):
         from transformers import AutoTokenizer
         tokenizer = AutoTokenizer.from_pretrained(self.dir_model, trust_remote_code=True)
@@ -6795,12 +6803,33 @@ class Glm4Model(TextModel):
             self.gguf_writer.add_rope_scaling_type(gguf.RopeScalingType.YARN)
             self.gguf_writer.add_rope_scaling_factor(rope_scaling["factor"])
             self.gguf_writer.add_rope_scaling_orig_ctx_len(rope_scaling["original_max_position_embeddings"])
+        
+        # NextN/MTP prediction layers support
+        if (num_nextn_predict_layers := self.hparams.get("num_nextn_predict_layers")) is not None:
+            self.gguf_writer.add_nextn_predict_layers(num_nextn_predict_layers)
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         if name.startswith("model.visual."): # ignore visual part of Glm4v
             return []
         elif name.startswith("model.language_model."):
             name = name.replace("language_model.", "") # for Glm4v
+        
+        # Handle NextN/MTP layer tensors
+        if "nextn" in name.lower():
+            # Map NextN layer tensor names to GGUF format
+            if "nextn.eh_proj" in name:
+                return [(self.map_tensor_name(name.replace("nextn.eh_proj", "nextn.eh_proj")), data_torch)]
+            elif "nextn.embed_tokens" in name:
+                return [(self.map_tensor_name(name.replace("nextn.embed_tokens", "nextn.embed_tokens")), data_torch)]
+            elif "nextn.enorm" in name:
+                return [(self.map_tensor_name(name.replace("nextn.enorm", "nextn.enorm")), data_torch)]
+            elif "nextn.hnorm" in name:
+                return [(self.map_tensor_name(name.replace("nextn.hnorm", "nextn.hnorm")), data_torch)]
+            elif "nextn.shared_head_head" in name:
+                return [(self.map_tensor_name(name.replace("nextn.shared_head_head", "nextn.shared_head_head")), data_torch)]
+            elif "nextn.shared_head_norm" in name:
+                return [(self.map_tensor_name(name.replace("nextn.shared_head_norm", "nextn.shared_head_norm")), data_torch)]
+        
         return super().modify_tensors(data_torch, name, bid)
 
 
@@ -6888,6 +6917,28 @@ class Glm4MoeModel(TextModel):
         # Handle main token embedding (but not layer-specific NextN embeddings)
         if name == "model.embed_tokens.weight" and ".layers." not in name:
             return [(self.map_tensor_name("token_embd.weight"), data_torch)]
+
+        # Handle NextN/MTP layer tensors
+        if "nextn" in name.lower():
+            # Map NextN layer tensor names to GGUF format
+            if "nextn.eh_proj" in name:
+                new_name = self.map_tensor_name(name)
+                return [(new_name, data_torch)]
+            elif "nextn.embed_tokens" in name:
+                new_name = self.map_tensor_name(name)
+                return [(new_name, data_torch)]
+            elif "nextn.enorm" in name:
+                new_name = self.map_tensor_name(name)
+                return [(new_name, data_torch)]
+            elif "nextn.hnorm" in name:
+                new_name = self.map_tensor_name(name)
+                return [(new_name, data_torch)]
+            elif "nextn.shared_head_head" in name:
+                new_name = self.map_tensor_name(name)
+                return [(new_name, data_torch)]
+            elif "nextn.shared_head_norm" in name:
+                new_name = self.map_tensor_name(name)
+                return [(new_name, data_torch)]
 
         # Handle routed experts
         if name.find("mlp.experts") != -1:
