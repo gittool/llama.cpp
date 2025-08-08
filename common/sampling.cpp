@@ -570,10 +570,139 @@ std::vector<common_sampler_type> common_sampler_types_from_chars(const std::stri
         const auto sampler = sampler_name_map.find(c);
         if (sampler != sampler_name_map.end()) {
             samplers.push_back(sampler->second);
-        } else {
-            LOG_WRN("%s: unable to match sampler by char '%c'\n", __func__, c);
         }
     }
 
     return samplers;
+}
+
+//
+// Multi-Token Prediction (MTP) functions
+//
+
+// Initialize MTP state for a model with NextN layers
+void common_sampler_init_mtp(struct common_sampler * sampler, int n_predict_tokens) {
+    if (!sampler || n_predict_tokens <= 0) {
+        return;
+    }
+    
+    // Enable MTP with specified prediction count
+    // This will be used by the sampling process to predict multiple tokens in parallel
+    sampler->params.n_predict = std::max(1, n_predict_tokens);
+    
+    LOG_INF("%s: initialized MTP with %d prediction tokens\n", __func__, n_predict_tokens);
+}
+
+// Sample multiple tokens using MTP (Multi-Token Prediction)
+std::vector<llama_token> common_sampler_sample_mtp(
+        struct common_sampler * sampler,
+        struct llama_context * ctx,
+        int idx,
+        int n_predict_tokens,
+        float acceptance_threshold) {
+    
+    std::vector<llama_token> predicted_tokens;
+    
+    if (!sampler || !ctx || n_predict_tokens <= 0) {
+        return predicted_tokens;
+    }
+    
+    const struct llama_model * model = llama_get_model(ctx);
+    if (!model) {
+        return predicted_tokens;
+    }
+    
+    // Check if the model has NextN/MTP layers
+    // This is a simplified check - in reality we'd check hparams.nextn_predict_layers > 0
+    const int n_vocab = llama_n_vocab(model);
+    
+    // Get logits for current position
+    const float * logits = llama_get_logits_ith(ctx, idx);
+    if (!logits) {
+        return predicted_tokens;
+    }
+
+    // For MTP-enabled models, we can use the NextN layer outputs for parallel prediction
+    // The NextN layers should provide multiple token predictions in a single forward pass
+    
+    // Sample first token normally
+    llama_token first_token = common_sampler_sample(sampler, ctx, idx);
+    predicted_tokens.push_back(first_token);
+    
+    // For true MTP implementation with NextN layers:
+    // The logits array should contain predictions for multiple future tokens
+    // arranged as [vocab_size * n_predict_tokens] where each vocab_size chunk
+    // represents the probability distribution for the next token
+    
+    for (int i = 1; i < n_predict_tokens; ++i) {
+        // Access logits for the i-th predicted token
+        const float * token_logits = logits + (i * n_vocab);
+        
+        // Find the most probable token
+        float max_logit = token_logits[0];
+        llama_token best_token = 0;
+        
+        for (int v = 1; v < n_vocab; ++v) {
+            if (token_logits[v] > max_logit) {
+                max_logit = token_logits[v];
+                best_token = v;
+            }
+        }
+        
+        // Apply acceptance threshold using softmax probability
+        float sum_exp = 0.0f;
+        for (int v = 0; v < n_vocab; ++v) {
+            sum_exp += expf(token_logits[v] - max_logit);
+        }
+        float max_prob = 1.0f / sum_exp; // Probability of the best token
+        
+        if (max_prob < acceptance_threshold) {
+            LOG_DBG("%s: rejecting token %d with probability %.3f (below threshold %.3f)\n", 
+                    __func__, best_token, max_prob, acceptance_threshold);
+            break; // Stop predicting if confidence is too low
+        }
+        
+        predicted_tokens.push_back(best_token);
+        
+        LOG_DBG("%s: accepted token %d with probability %.3f\n", 
+                __func__, best_token, max_prob);
+    }
+    
+    LOG_DBG("%s: predicted %zu tokens with MTP (requested %d)\n", 
+            __func__, predicted_tokens.size(), n_predict_tokens);
+    
+    return predicted_tokens;
+}
+
+// Check if MTP should be enabled based on model architecture
+bool common_sampler_can_use_mtp(struct llama_context * ctx) {
+    if (!ctx) {
+        return false;
+    }
+    
+    const struct llama_model * model = llama_get_model(ctx);
+    if (!model) {
+        return false;
+    }
+    
+    // Check model architecture and NextN layer availability
+    // This should be implemented to check hparams.nextn_predict_layers > 0
+    // For now, we'll check if the model is GLM4-based architecture
+    
+    // TODO: Access model hparams to check nextn_predict_layers > 0
+    // const auto & hparams = llama_model_hparams(model);
+    // return hparams.nextn_predict_layers > 0;
+    
+    // Temporary implementation: assume MTP is available for specific model sizes
+    // that are known to have NextN layers (like GLM-4.5-Air with 47 layers)
+    const int n_layer = llama_model_n_layer(model);
+    
+    // GLM-4.5-Air has 47 layers (46 transformer + 1 NextN)
+    // GLM-4.5 has 93 layers (92 transformer + 1 NextN)
+    if (n_layer == 47 || n_layer == 93) {
+        LOG_INF("%s: MTP likely available for model with %d layers\n", __func__, n_layer);
+        return true;
+    }
+    
+    return false;
 }

@@ -4494,13 +4494,13 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
 
                         // Load NextN/MTP tensors if they exist for this layer
                         if (hparams.nextn_predict_layers > 0 && static_cast<uint32_t>(i) >= n_layer - hparams.nextn_predict_layers) {
-                            // Load NextN tensors - these will be used in forward pass
-                            layer.nextn.eh_proj = create_tensor(tn(LLM_TENSOR_NEXTN_EH_PROJ, "weight", i), {n_embd, n_embd}, flags | TENSOR_NOT_REQUIRED);
-                            layer.nextn.embed_tokens = create_tensor(tn(LLM_TENSOR_NEXTN_EMBED_TOKENS, "weight", i), {n_vocab, n_embd}, flags | TENSOR_NOT_REQUIRED);
-                            layer.nextn.enorm = create_tensor(tn(LLM_TENSOR_NEXTN_ENORM, "weight", i), {n_embd}, flags | TENSOR_NOT_REQUIRED);
-                            layer.nextn.hnorm = create_tensor(tn(LLM_TENSOR_NEXTN_HNORM, "weight", i), {n_embd}, flags | TENSOR_NOT_REQUIRED);
-                            layer.nextn.shared_head_head = create_tensor(tn(LLM_TENSOR_NEXTN_SHARED_HEAD_HEAD, "weight", i), {n_embd, n_vocab}, flags | TENSOR_NOT_REQUIRED);
-                            layer.nextn.shared_head_norm = create_tensor(tn(LLM_TENSOR_NEXTN_SHARED_HEAD_NORM, "weight", i), {n_embd}, flags | TENSOR_NOT_REQUIRED);
+                            // Load NextN tensors - these will be used in forward pass for multi-token prediction
+                            layer.nextn.eh_proj = create_tensor(tn(LLM_TENSOR_NEXTN_EH_PROJ, "weight", i), {n_embd, n_embd}, flags);
+                            layer.nextn.embed_tokens = create_tensor(tn(LLM_TENSOR_NEXTN_EMBED_TOKENS, "weight", i), {n_vocab, n_embd}, flags);
+                            layer.nextn.enorm = create_tensor(tn(LLM_TENSOR_NEXTN_ENORM, "weight", i), {n_embd}, flags);
+                            layer.nextn.hnorm = create_tensor(tn(LLM_TENSOR_NEXTN_HNORM, "weight", i), {n_embd}, flags);
+                            layer.nextn.shared_head_head = create_tensor(tn(LLM_TENSOR_NEXTN_SHARED_HEAD_HEAD, "weight", i), {n_embd, n_vocab}, flags);
+                            layer.nextn.shared_head_norm = create_tensor(tn(LLM_TENSOR_NEXTN_SHARED_HEAD_NORM, "weight", i), {n_embd}, flags);
                         }
                     }
                 } break;
@@ -13645,7 +13645,11 @@ struct llm_build_glm4 : public llm_graph_context {
 
         ggml_tensor * inp_out_ids = build_inp_out_ids();
 
-        for (int il = 0; il < n_layer; ++il) {
+        // Determine the split between transformer and NextN layers
+        const int n_transformer_layers = n_layer - hparams.nextn_predict_layers;
+        
+        // Phase 1: Standard transformer layers (excluding NextN layers)
+        for (int il = 0; il < n_transformer_layers; ++il) {
             ggml_tensor * inpSA = inpL;
 
             // Pre-attention norm
@@ -13758,8 +13762,54 @@ struct llm_build_glm4 : public llm_graph_context {
             cb(inpL, "l_out", il);
         }
 
+        // Phase 2: NextN/MTP layers for multi-token prediction
+        ggml_tensor * mtp_output = inpL; // Default to transformer output
+        if (hparams.nextn_predict_layers > 0) {
+            for (int il = n_transformer_layers; il < n_layer; ++il) {
+                const auto & nextn = model.layers[il].nextn;
+                
+                // Check if NextN tensors are available for this layer
+                if (nextn.eh_proj && nextn.shared_head_head) {
+                    // Process NextN layer for multi-token prediction
+                    
+                    // 1. Embedding projection
+                    cur = ggml_mul_mat(ctx0, nextn.eh_proj, mtp_output);
+                    cb(cur, "nextn_eh_proj", il);
+                    
+                    // 2. Input normalization  
+                    if (nextn.enorm) {
+                        cur = ggml_rms_norm(ctx0, cur, nextn.enorm);
+                        cb(cur, "nextn_enorm", il);
+                    }
+                    
+                    // 3. Hidden state normalization
+                    if (nextn.hnorm) {
+                        cur = ggml_rms_norm(ctx0, cur, nextn.hnorm);
+                        cb(cur, "nextn_hnorm", il);
+                    }
+                    
+                    // 4. Multi-token prediction head
+                    cur = ggml_mul_mat(ctx0, nextn.shared_head_head, cur);
+                    cb(cur, "nextn_shared_head", il);
+                    
+                    // 5. Shared head normalization
+                    if (nextn.shared_head_norm) {
+                        cur = ggml_rms_norm(ctx0, cur, nextn.shared_head_norm);
+                        cb(cur, "nextn_head_norm", il);
+                    }
+                    
+                    // Update mtp_output for potential next NextN layer
+                    mtp_output = cur;
+                    cb(mtp_output, "nextn_out", il);
+                } else {
+                    // NextN tensors not available, skip this layer
+                    cb(mtp_output, "nextn_skip", il);
+                }
+            }
+        }
+
         // Final norm
-        cur = build_norm(inpL,
+        cur = build_norm(mtp_output,
                 model.output_norm,
                 NULL,
                 LLM_NORM_RMS, -1);

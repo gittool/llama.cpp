@@ -158,6 +158,11 @@ struct common_params_sampling {
     bool    no_perf            = false; // disable performance metrics
     bool    timing_per_token   = false;
 
+    // Multi-Token Prediction (MTP) parameters
+    int32_t n_predict_tokens   = 0;     // number of tokens to predict ahead for MTP (0 = disabled)
+    float   mtp_accept_rate    = 0.7f;  // acceptance rate threshold for MTP predictions (0.0-1.0)
+    bool    mtp_enabled        = false; // whether MTP is enabled
+
     std::vector<std::string> dry_sequence_breakers = {"\n", ":", "\"", "*"};     // default sequence breakers for DRY
 
 

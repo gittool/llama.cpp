@@ -316,6 +316,10 @@ extern "C" {
         uint32_t yarn_orig_ctx;    // YaRN original context size
         float    defrag_thold;     // defragment the KV cache if holes/size > thold, <= 0 disabled (default)
 
+        // Multi-Token Prediction (MTP) parameters
+        int32_t  n_predict_tokens; // number of tokens to predict ahead for MTP, 0 = disabled, >0 = MTP enabled
+        float    mtp_accept_rate;  // acceptance rate threshold for MTP predictions, 0.0-1.0
+
         ggml_backend_sched_eval_callback cb_eval;
         void * cb_eval_user_data;
 

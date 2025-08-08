@@ -177,6 +177,27 @@ struct llama_layer_nextn {
     struct ggml_tensor * shared_head_norm = nullptr;
 };
 
+// Multi-Token Prediction (MTP) processing state
+struct llama_mtp_state {
+    // Current prediction tokens for parallel generation
+    std::vector<llama_token> predicted_tokens;
+    
+    // Confidence scores for each predicted token
+    std::vector<float> prediction_scores;
+    
+    // Number of tokens currently being predicted in parallel
+    int32_t n_active_predictions = 0;
+    
+    // Accept/reject history for adaptive prediction
+    std::vector<bool> accept_history;
+    
+    // Running acceptance rate
+    float current_accept_rate = 0.0f;
+    
+    // Whether MTP is currently active
+    bool enabled = false;
+};
+
 struct llama_layer {
     // normalization
     struct ggml_tensor * attn_norm       = nullptr;

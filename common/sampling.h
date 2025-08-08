@@ -105,3 +105,21 @@ std::vector<enum common_sampler_type> common_sampler_types_from_chars(const std:
 
 llama_sampler * llama_sampler_init_llg(const llama_vocab * vocab,
                 const char * grammar_kind, const char * grammar_data);
+
+//
+// Multi-Token Prediction (MTP) functions
+//
+
+// Initialize MTP state for a model with NextN layers
+void common_sampler_init_mtp(struct common_sampler * sampler, int n_predict_tokens);
+
+// Sample multiple tokens using MTP (Multi-Token Prediction)
+std::vector<llama_token> common_sampler_sample_mtp(
+        struct common_sampler * sampler,
+        struct llama_context * ctx,
+        int idx,
+        int n_predict_tokens,
+        float acceptance_threshold);
+
+// Check if MTP should be enabled based on model architecture
+bool common_sampler_can_use_mtp(struct llama_context * ctx);
