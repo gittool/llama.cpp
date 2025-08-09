@@ -620,9 +620,9 @@ std::vector<llama_token> common_sampler_sample_mtp(
     // For GLM4 models with MTP layers, check for NextN support
     bool has_mtp_layers = (n_layer == 47 || n_layer == 93); // GLM-4.5-Air or GLM-4.5
     
-    // Also check model architecture to confirm MTP support
-    const llama_model_hparams * hparams = llama_model_get_hparams(model);
-    if (hparams && hparams->nextn_predict_layers > 0) {
+    // Also check model architecture to confirm MTP support using API
+    int32_t n_mtp_layers = llama_model_n_mtp_layers(model);
+    if (n_mtp_layers > 0) {
         has_mtp_layers = true;
     }
     
@@ -723,15 +723,16 @@ bool common_sampler_can_use_mtp(struct llama_context * ctx) {
     // - GLM-4.5 has 93 layers (92 transformer + 1 NextN)
     bool is_glm4_mtp = (n_layer == 47 || n_layer == 93);
     
-    if (is_glm4_mtp) {
-        LOG_INF("%s: MTP available for GLM4 model with %d layers\n", __func__, n_layer);
-        return true;
+    // Also check MTP support using API
+    int32_t n_mtp_layers = llama_model_n_mtp_layers(model);
+    if (n_mtp_layers > 0) {
+        is_glm4_mtp = true;
     }
     
-    // Future: Add proper hparams check when available
-    // TODO: Access model hparams to check nextn_predict_layers > 0
-    // const auto & hparams = llama_model_hparams(model);
-    // return hparams.nextn_predict_layers > 0;
+    if (is_glm4_mtp) {
+        LOG_INF("%s: MTP available for model with %d layers (%d MTP layers)\n", __func__, n_layer, n_mtp_layers);
+        return true;
+    }
     
     LOG_DBG("%s: MTP not available for model with %d layers\n", __func__, n_layer);
     return false;
