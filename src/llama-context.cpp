@@ -3075,19 +3075,18 @@ int32_t llama_predict_mtp_tokens(
 // For scenario A (shared_head_head shape = [n_embd, n_vocab]) we do not yet have true future hidden states.
 // This returns only the last token hidden (i_pred==0). Future indices => nullptr.
 const float * llama_get_mtp_hidden_ith(struct llama_context * ctx, int32_t idx, int32_t i_pred) {
-    (void) idx; // currently unused (single position)
+    // 現状: 未来 hidden 未構築。i_pred==0 のとき decode 出力埋め込み (final norm 前後) の該当行を返す。
     if (!ctx) return nullptr;
-    if (i_pred != 0) return nullptr; // no future hidden states yet
-    // embeddings buffer holds per-output hidden after final norm (before lm head)
+    if (i_pred != 0) return nullptr;
     float * embd = ctx->get_embeddings();
     if (!embd) return nullptr;
-    // Map last logical output id to embedding row 0..n_outputs-1.
-    // Simplest: return embedding of the last output (current token)
-    uint32_t n_out = ctx->n_outputs; // friend access; n_outputs is public in struct
-    if (n_out == 0) return nullptr;
     const llama_model & model = ctx->get_model();
     const int n_embd = model.hparams.n_embd;
-    return embd + (size_t)(n_out - 1) * n_embd;
+    if (idx < 0) return nullptr;
+    // 安全策: ubatch内の idx が連続出力長未満であることを確認できないため、直近 logits 取得パターンでは最後のトークン idx を渡している。
+    // 典型ケース: idx は batch 内相対インデックス (0..n_tokens-1)。
+    // ここでは単純に embd + idx*n_embd を返し、呼び出し側は最後のトークン idx を指定する想定。
+    return embd + (size_t) idx * n_embd;
 }
 
 int32_t llama_accept_predicted_tokens(struct llama_context * ctx, int32_t idx, int32_t n_tokens, const llama_token * tokens) {
