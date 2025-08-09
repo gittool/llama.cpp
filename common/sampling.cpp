@@ -594,3 +594,82 @@ std::vector<llama_token> common_sampler_sample_and_accept_mtp(
     }
     return accepted;
 }
+
+// ---------------------------------------------------------------------------
+// Sampler type helper implementations (previously missing -> linker errors)
+// ---------------------------------------------------------------------------
+
+char common_sampler_type_to_chr(enum common_sampler_type cnstr) {
+    switch (cnstr) {
+        case COMMON_SAMPLER_TYPE_PENALTIES:    return 'R'; // Repeat penalties
+        case COMMON_SAMPLER_TYPE_DRY:          return 'D';
+        case COMMON_SAMPLER_TYPE_TOP_N_SIGMA:  return 'S';
+        case COMMON_SAMPLER_TYPE_TOP_K:        return 'K';
+        case COMMON_SAMPLER_TYPE_TYPICAL_P:    return 'Y';
+        case COMMON_SAMPLER_TYPE_TOP_P:        return 'P';
+        case COMMON_SAMPLER_TYPE_MIN_P:        return 'M';
+        case COMMON_SAMPLER_TYPE_XTC:          return 'X';
+        case COMMON_SAMPLER_TYPE_TEMPERATURE:  return 'T';
+        default: return '?';
+    }
+}
+
+std::string common_sampler_type_to_str(enum common_sampler_type cnstr) {
+    switch (cnstr) {
+        case COMMON_SAMPLER_TYPE_PENALTIES:    return "penalties";
+        case COMMON_SAMPLER_TYPE_DRY:          return "dry";
+        case COMMON_SAMPLER_TYPE_TOP_N_SIGMA:  return "top-n-sigma";
+        case COMMON_SAMPLER_TYPE_TOP_K:        return "top-k";
+        case COMMON_SAMPLER_TYPE_TYPICAL_P:    return "typical";
+        case COMMON_SAMPLER_TYPE_TOP_P:        return "top-p";
+        case COMMON_SAMPLER_TYPE_MIN_P:        return "min-p";
+        case COMMON_SAMPLER_TYPE_XTC:          return "xtc";
+        case COMMON_SAMPLER_TYPE_TEMPERATURE:  return "temperature";
+        default: return "unknown";
+    }
+}
+
+std::vector<enum common_sampler_type> common_sampler_types_from_names(const std::vector<std::string> & names, bool allow_alt_names) {
+    std::vector<enum common_sampler_type> out;
+    out.reserve(names.size());
+    for (const auto & n : names) {
+        if (n == "penalties") out.push_back(COMMON_SAMPLER_TYPE_PENALTIES);
+        else if (n == "dry") out.push_back(COMMON_SAMPLER_TYPE_DRY);
+        else if (n == "top-n-sigma" || n == "top_n_sigma") out.push_back(COMMON_SAMPLER_TYPE_TOP_N_SIGMA);
+        else if (n == "top-k" || n == "top_k") out.push_back(COMMON_SAMPLER_TYPE_TOP_K);
+        else if (n == "typical" || n == "typical-p") out.push_back(COMMON_SAMPLER_TYPE_TYPICAL_P);
+        else if (n == "top-p" || n == "top_p") out.push_back(COMMON_SAMPLER_TYPE_TOP_P);
+        else if (n == "min-p" || n == "min_p") out.push_back(COMMON_SAMPLER_TYPE_MIN_P);
+        else if (n == "xtc") out.push_back(COMMON_SAMPLER_TYPE_XTC);
+        else if (n == "temperature" || n == "temp") out.push_back(COMMON_SAMPLER_TYPE_TEMPERATURE);
+        else if (allow_alt_names) {
+            // alternative short names
+            if (n == "k") out.push_back(COMMON_SAMPLER_TYPE_TOP_K);
+            else if (n == "p") out.push_back(COMMON_SAMPLER_TYPE_TOP_P);
+            else if (n == "t") out.push_back(COMMON_SAMPLER_TYPE_TEMPERATURE);
+            else if (n == "m") out.push_back(COMMON_SAMPLER_TYPE_MIN_P);
+            else if (n == "s") out.push_back(COMMON_SAMPLER_TYPE_TOP_N_SIGMA);
+        }
+    }
+    return out;
+}
+
+std::vector<enum common_sampler_type> common_sampler_types_from_chars(const std::string & chars) {
+    std::vector<enum common_sampler_type> out;
+    out.reserve(chars.size());
+    for (char c : chars) {
+        switch (c) {
+            case 'R': out.push_back(COMMON_SAMPLER_TYPE_PENALTIES); break;
+            case 'D': out.push_back(COMMON_SAMPLER_TYPE_DRY); break;
+            case 'S': out.push_back(COMMON_SAMPLER_TYPE_TOP_N_SIGMA); break;
+            case 'K': out.push_back(COMMON_SAMPLER_TYPE_TOP_K); break;
+            case 'Y': out.push_back(COMMON_SAMPLER_TYPE_TYPICAL_P); break;
+            case 'P': out.push_back(COMMON_SAMPLER_TYPE_TOP_P); break;
+            case 'M': out.push_back(COMMON_SAMPLER_TYPE_MIN_P); break;
+            case 'X': out.push_back(COMMON_SAMPLER_TYPE_XTC); break;
+            case 'T': out.push_back(COMMON_SAMPLER_TYPE_TEMPERATURE); break;
+            default: break;
+        }
+    }
+    return out;
+}
