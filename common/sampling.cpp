@@ -588,7 +588,8 @@ void common_sampler_init_mtp(struct common_sampler * sampler, int n_predict_toke
     
     // Enable MTP with specified prediction count
     // This will be used by the sampling process to predict multiple tokens in parallel
-    sampler->params.n_predict = std::max(1, n_predict_tokens);
+    sampler->params.n_predict_tokens = std::max(1, n_predict_tokens);
+    sampler->params.mtp_enabled = true;
     
     LOG_INF("%s: initialized MTP with %d prediction tokens\n", __func__, n_predict_tokens);
 }
