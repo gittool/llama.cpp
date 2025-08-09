@@ -1300,6 +1300,97 @@ extern "C" {
         const struct llama_vocab * vocab,
                       const char * grammar_str,
                       const char * grammar_root,
+                  const char ** trigger_patterns,
+                        size_t   num_trigger_patterns,
+            const llama_token * trigger_tokens,
+                        size_t   num_trigger_tokens);
+
+    /// @details Apply a sampler to logits. The logits are modified in place.
+    LLAMA_API void llama_sampler_apply(
+            struct llama_sampler * smpl,
+              struct llama_context * ctx,
+                         int32_t   idx);
+
+    /// @details Apply a sampler to token_data. The token_data is modified in place.
+    LLAMA_API void llama_sampler_apply_token_data(
+            struct llama_sampler * smpl,
+              struct llama_context * ctx,
+                         int32_t   idx,
+          struct llama_token_data_array * token_data_array);
+
+    /// @details Sample a token from the logits. The ctx is used only when sampling from the model vocabulary.
+    LLAMA_API llama_token llama_sampler_sample(
+            struct llama_sampler * smpl,
+              struct llama_context * ctx,
+                         int32_t   idx);
+
+    /// @details Accept a sampled token, e.g. apply penalties, update the internal state of the sampler, etc.
+    LLAMA_API void llama_sampler_accept(
+            struct llama_sampler * smpl,
+                       llama_token   token);
+
+    /// @details Reset the sampler to its initial state. E.g. clear the internal state of the sampler, reset the random number generators, etc.
+    LLAMA_API void llama_sampler_reset(struct llama_sampler * smpl);
+
+    /// @details Clone a sampler to create a new instance. The new sampler is independent of the original.
+    LLAMA_API struct llama_sampler * llama_sampler_clone(const struct llama_sampler * smpl);
+
+    /// @details Free a sampler instance. This function should be called when the sampler is no longer needed.
+    LLAMA_API void llama_sampler_free(struct llama_sampler * smpl);
+
+    /// @details Get the name of the sampler. The returned name is non-null and valid for the lifetime of the sampler object.
+    LLAMA_API const char * llama_sampler_name(const struct llama_sampler * smpl);
+
+    /// @details Chain multiple samplers together. The chain should be built from the leftmost sampler to the rightmost sampler.
+    /// For example, if you want to chain `sampler_1`, `sampler_2`, and `sampler_3`, you should do:
+    /// 1. llama_sampler_chain_add(chain, sampler_1)
+    /// 2. llama_sampler_chain_add(chain, sampler_2)
+    /// 3. llama_sampler_chain_add(chain, sampler_3)
+    /// The resulting chain will be: sampler_1 -> sampler_2 -> sampler_3
+    LLAMA_API struct llama_sampler * llama_sampler_chain_init(struct llama_sampler_params params);
+    LLAMA_API void                   llama_sampler_chain_add(struct llama_sampler * chain, struct llama_sampler * smpl);
+    LLAMA_API struct llama_sampler * llama_sampler_chain_get(const struct llama_sampler * chain, int32_t i);
+    LLAMA_API struct llama_sampler * llama_sampler_chain_remove(struct llama_sampler * chain, int32_t i);
+    LLAMA_API int                    llama_sampler_chain_n(const struct llama_sampler * chain);
+
+    //
+    // Multi-Token Prediction (MTP) API
+    //
+
+    /// @details Check if the model supports Multi-Token Prediction (MTP)
+    /// @param model The model to check for MTP support
+    /// @return true if the model has NextN/MTP layers, false otherwise
+    LLAMA_API bool llama_model_has_mtp_support(const struct llama_model * model);
+
+    /// @details Get the number of NextN/MTP prediction layers in the model
+    /// @param model The model to query
+    /// @return The number of NextN/MTP layers, 0 if not supported
+    LLAMA_API int32_t llama_model_n_mtp_layers(const struct llama_model * model);
+
+    /// @details Check if MTP can be used with the current context state
+    /// @param ctx The context to check
+    /// @return true if MTP can be used, false otherwise
+    LLAMA_API bool llama_context_can_use_mtp(const struct llama_context * ctx);
+
+    /// @details Predict multiple tokens in parallel using MTP layers
+    /// @param ctx The context to use for prediction
+    /// @param idx The index of the last token to predict from
+    /// @param n_predict Maximum number of tokens to predict
+    /// @param confidence_threshold Minimum confidence to accept a prediction (0.0-1.0)
+    /// @param tokens Output buffer for predicted tokens (must be at least n_predict in size)
+    /// @return Number of tokens actually predicted (may be less than n_predict)
+    LLAMA_API int32_t llama_predict_mtp_tokens(
+            struct llama_context * ctx,
+                         int32_t   idx,
+                         int32_t   n_predict,
+                           float   confidence_threshold,
+                     llama_token * tokens);
+
+    //
+    // Model info API
+    //
+                      const char * grammar_str,
+                      const char * grammar_root,
                      const char ** trigger_patterns,
                             size_t num_trigger_patterns,
                const llama_token * trigger_tokens,

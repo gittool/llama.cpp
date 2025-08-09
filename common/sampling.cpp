@@ -620,6 +620,12 @@ std::vector<llama_token> common_sampler_sample_mtp(
     // For GLM4 models with MTP layers, check for NextN support
     bool has_mtp_layers = (n_layer == 47 || n_layer == 93); // GLM-4.5-Air or GLM-4.5
     
+    // Also check model architecture to confirm MTP support
+    const llama_model_hparams * hparams = llama_model_get_hparams(model);
+    if (hparams && hparams->nextn_predict_layers > 0) {
+        has_mtp_layers = true;
+    }
+    
     if (!has_mtp_layers) {
         // Fallback to single token sampling
         llama_token token = common_sampler_sample(sampler, ctx, idx);

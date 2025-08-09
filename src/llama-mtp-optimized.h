@@ -159,6 +159,26 @@ private:
         
         return predictions;
     }
+
+    // Utility function to check if MTP processing is available for a model
+    static bool is_mtp_available(const llama_model & model) {
+        return model.hparams.nextn_predict_layers > 0;
+    }
+
+    // Get the number of tokens that can be predicted in parallel
+    int get_max_parallel_tokens() const {
+        return config.n_predict_ahead;
+    }
+
+    // Enable/disable speculative execution
+    void set_speculative_mode(bool enable) {
+        config.enable_speculative = enable;
+    }
+
+    // Set confidence threshold for accepting predictions
+    void set_confidence_threshold(float threshold) {
+        config.confidence_threshold = threshold;
+    }
 };
 
 // Utility functions for MTP configuration

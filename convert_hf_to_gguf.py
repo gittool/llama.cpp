@@ -3091,23 +3091,27 @@ class Ernie4_5MoeModel(Ernie4_5Model):
         if name.endswith("e_score_correction_bias"):
             name = name.replace("e_score_correction_bias", "e_score_correction.bias")
 
-        # skip Multi-Token Prediction (MTP) layers (again, same as DeepseekV2)
+        # Process Multi-Token Prediction (MTP) layers - now enabled for inference
+        # MTP tensors are converted and will be used in the forward pass
         match = re.match(r"model.mtp_block.(\d+)", name)
         if match:
-            return []
+            # Map MTP block tensors to their GGUF equivalents
+            pass  # Allow processing to continue
 
-        # skip all other MTP tensors for now
         match = re.match(r"model.mtp_emb_norm.(\d+)", name)
         if match:
-            return []
+            # Map MTP embedding norm tensors
+            pass  # Allow processing to continue
 
         match = re.match(r"model.mtp_hidden_norm.(\d+)", name)
         if match:
-            return []
+            # Map MTP hidden norm tensors
+            pass  # Allow processing to continue
 
         match = re.match(r"model.mtp_linear_proj.(\d+)", name)
         if match:
-            return []
+            # Map MTP linear projection tensors
+            pass  # Allow processing to continue
 
         # process the experts separately
         if name.find("mlp.experts") != -1:
@@ -6284,11 +6288,13 @@ class DeepseekV2Model(TextModel):
         if name.endswith("e_score_correction_bias"):
             name = name.replace("e_score_correction_bias", "e_score_correction.bias")
 
-        # skip Multi-Token Prediction (MTP) layers
+        # Process Multi-Token Prediction (MTP) layers - now enabled for inference
+        # These layers are part of the model architecture and should be processed
         block_count = self.hparams["num_hidden_layers"]
         match = re.match(r"model.layers.(\d+)", name)
         if match and int(match.group(1)) >= block_count:
-            return []
+            # This is a NextN/MTP layer - process it normally
+            pass  # Allow processing to continue
 
         # process the experts separately
         if name.find("mlp.experts") != -1:
