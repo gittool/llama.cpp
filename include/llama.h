@@ -1305,12 +1305,6 @@ extern "C" {
             const llama_token * trigger_tokens,
                         size_t   num_trigger_tokens);
 
-    /// @details Apply a sampler to logits. The logits are modified in place.
-    LLAMA_API void llama_sampler_apply(
-            struct llama_sampler * smpl,
-              struct llama_context * ctx,
-                         int32_t   idx);
-
     /// @details Apply a sampler to token_data. The token_data is modified in place.
     LLAMA_API void llama_sampler_apply_token_data(
             struct llama_sampler * smpl,
@@ -1347,7 +1341,6 @@ extern "C" {
     /// 2. llama_sampler_chain_add(chain, sampler_2)
     /// 3. llama_sampler_chain_add(chain, sampler_3)
     /// The resulting chain will be: sampler_1 -> sampler_2 -> sampler_3
-    LLAMA_API struct llama_sampler * llama_sampler_chain_init(struct llama_sampler_params params);
     LLAMA_API void                   llama_sampler_chain_add(struct llama_sampler * chain, struct llama_sampler * smpl);
     LLAMA_API struct llama_sampler * llama_sampler_chain_get(const struct llama_sampler * chain, int32_t i);
     LLAMA_API struct llama_sampler * llama_sampler_chain_remove(struct llama_sampler * chain, int32_t i);
@@ -1389,12 +1382,6 @@ extern "C" {
     //
     // Model info API
     //
-                      const char * grammar_str,
-                      const char * grammar_root,
-                     const char ** trigger_patterns,
-                            size_t num_trigger_patterns,
-               const llama_token * trigger_tokens,
-                            size_t num_trigger_tokens);
 
 
     /// NOTE: Avoid using on the full vocabulary as searching for repeated tokens can become slow. For example, apply top-k or top-p sampling first.

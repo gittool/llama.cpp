@@ -11,6 +11,7 @@
 #include <cstring>
 #include <limits>
 #include <stdexcept>
+#include <cmath>
 
 //
 // llama_context
@@ -2927,4 +2928,102 @@ void llama_opt_epoch(
         idata_split,
         callback_train,
         callback_eval);
+}
+
+//
+// Multi-Token Prediction (MTP) API implementation
+//
+
+bool llama_model_has_mtp_support(const struct llama_model * model) {
+    if (!model) {
+        return false;
+    }
+    // Check if model has NextN/MTP prediction layers
+    return model->hparams.nextn_predict_layers > 0;
+}
+
+int32_t llama_model_n_mtp_layers(const struct llama_model * model) {
+    if (!model) {
+        return 0;
+    }
+    return static_cast<int32_t>(model->hparams.nextn_predict_layers);
+}
+
+bool llama_context_can_use_mtp(const struct llama_context * ctx) {
+    if (!ctx || !ctx->model) {
+        return false;
+    }
+    
+    // Check if model supports MTP and context is ready
+    return llama_model_has_mtp_support(ctx->model) && ctx->kv_self.head >= 0;
+}
+
+int32_t llama_predict_mtp_tokens(
+        struct llama_context * ctx,
+                     int32_t   idx,
+                     int32_t   n_predict,
+                       float   confidence_threshold,
+                 llama_token * tokens) {
+    if (!ctx || !tokens || n_predict <= 0) {
+        return 0;
+    }
+    
+    if (!llama_context_can_use_mtp(ctx)) {
+        return 0;
+    }
+    
+    // Get logits for the specified token position
+    const float * logits = llama_get_logits_ith(ctx, idx);
+    if (!logits) {
+        return 0;
+    }
+    
+    const int32_t n_vocab = llama_vocab_n_tokens(llama_model_get_vocab(ctx->model));
+    int32_t n_predicted = 0;
+    
+    // For MTP-enabled models, predict multiple tokens
+    for (int32_t i = 0; i < n_predict; ++i) {
+        // Access logits for the i-th predicted token
+        // Note: This assumes NextN layers produce concatenated vocab distributions
+        const float * token_logits = logits + (i * n_vocab);
+        
+        // Find the most probable token using argmax
+        float max_logit = token_logits[0];
+        llama_token best_token = 0;
+        
+        for (int32_t v = 1; v < n_vocab; ++v) {
+            if (token_logits[v] > max_logit) {
+                max_logit = token_logits[v];
+                best_token = static_cast<llama_token>(v);
+            }
+        }
+        
+        // Calculate confidence using softmax probability
+        float sum_exp = 0.0f;
+        for (int32_t v = 0; v < n_vocab; ++v) {
+            sum_exp += std::exp(token_logits[v] - max_logit);
+        }
+        
+        const float max_prob = std::exp(max_logit - max_logit) / sum_exp;
+        
+        // Check confidence threshold
+        if (max_prob < confidence_threshold) {
+            break; // Stop if confidence is too low
+        }
+        
+        // Validate token
+        if (best_token >= n_vocab || best_token < 0) {
+            break;
+        }
+        
+        tokens[n_predicted] = best_token;
+        n_predicted++;
+        
+        // Stop at EOS token
+        if (best_token == llama_vocab_eos(llama_model_get_vocab(ctx->model))) {
+            break;
+        }
+    }
+    
+    return n_predicted;
 }
