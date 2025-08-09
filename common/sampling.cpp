@@ -606,15 +606,27 @@ std::vector<llama_token> common_sampler_sample_mtp(
     if (!sampler || !ctx || n_predict_tokens <= 0) {
         return predicted_tokens;
     }
-    
+
     const struct llama_model * model = llama_get_model(ctx);
     if (!model) {
         return predicted_tokens;
     }
-    
+
     // Check if the model has NextN/MTP layers
-    // This is a simplified check - in reality we'd check hparams.nextn_predict_layers > 0
-    const int n_vocab = llama_n_vocab(model);
+    const int n_vocab = llama_vocab_n_tokens(llama_model_get_vocab(model));
+    const int n_layer = llama_model_n_layer(model);
+    
+    // For GLM4 models with MTP layers, check for NextN support
+    bool has_mtp_layers = (n_layer == 47 || n_layer == 93); // GLM-4.5-Air or GLM-4.5
+    
+    if (!has_mtp_layers) {
+        // Fallback to single token sampling
+        llama_token token = common_sampler_sample(sampler, ctx, idx);
+        if (token != LLAMA_TOKEN_NULL) {
+            predicted_tokens.push_back(token);
+        }
+        return predicted_tokens;
+    }
     
     // Get logits for current position
     const float * logits = llama_get_logits_ith(ctx, idx);
@@ -622,23 +634,25 @@ std::vector<llama_token> common_sampler_sample_mtp(
         return predicted_tokens;
     }
 
-    // For MTP-enabled models, we can use the NextN layer outputs for parallel prediction
-    // The NextN layers should provide multiple token predictions in a single forward pass
-    
-    // Sample first token normally
-    llama_token first_token = common_sampler_sample(sampler, ctx, idx);
-    predicted_tokens.push_back(first_token);
-    
-    // For true MTP implementation with NextN layers:
+    // For MTP-enabled models, the forward pass should produce logits for multiple tokens
     // The logits array should contain predictions for multiple future tokens
     // arranged as [vocab_size * n_predict_tokens] where each vocab_size chunk
     // represents the probability distribution for the next token
     
+    // Sample first token using standard sampling
+    llama_token first_token = common_sampler_sample(sampler, ctx, idx);
+    if (first_token == LLAMA_TOKEN_NULL) {
+        return predicted_tokens;
+    }
+    predicted_tokens.push_back(first_token);
+    
+    // For additional tokens, use MTP predictions
     for (int i = 1; i < n_predict_tokens; ++i) {
         // Access logits for the i-th predicted token
+        // Note: This assumes the NextN layers produce concatenated vocab distributions
         const float * token_logits = logits + (i * n_vocab);
         
-        // Find the most probable token
+        // Find the most probable token using argmax
         float max_logit = token_logits[0];
         llama_token best_token = 0;
         
@@ -650,16 +664,27 @@ std::vector<llama_token> common_sampler_sample_mtp(
         }
         
         // Apply acceptance threshold using softmax probability
+        // Calculate softmax for confidence estimation
         float sum_exp = 0.0f;
-        for (int v = 0; v < n_vocab; ++v) {
-            sum_exp += expf(token_logits[v] - max_logit);
-        }
-        float max_prob = 1.0f / sum_exp; // Probability of the best token
+        const float max_for_softmax = max_logit;
         
+        for (int v = 0; v < n_vocab; ++v) {
+            sum_exp += expf(token_logits[v] - max_for_softmax);
+        }
+        
+        const float max_prob = expf(max_logit - max_for_softmax) / sum_exp;
+        
+        // Check confidence threshold
         if (max_prob < acceptance_threshold) {
             LOG_DBG("%s: rejecting token %d with probability %.3f (below threshold %.3f)\n", 
                     __func__, best_token, max_prob, acceptance_threshold);
             break; // Stop predicting if confidence is too low
+        }
+        
+        // Additional checks for reasonable tokens
+        if (best_token >= n_vocab || best_token < 0) {
+            LOG_DBG("%s: rejecting invalid token %d\n", __func__, best_token);
+            break;
         }
         
         predicted_tokens.push_back(best_token);
@@ -672,9 +697,7 @@ std::vector<llama_token> common_sampler_sample_mtp(
             __func__, predicted_tokens.size(), n_predict_tokens);
     
     return predicted_tokens;
-}
-
-// Check if MTP should be enabled based on model architecture
+}// Check if MTP should be enabled based on model architecture
 bool common_sampler_can_use_mtp(struct llama_context * ctx) {
     if (!ctx) {
         return false;
@@ -685,24 +708,24 @@ bool common_sampler_can_use_mtp(struct llama_context * ctx) {
         return false;
     }
     
-    // Check model architecture and NextN layer availability
-    // This should be implemented to check hparams.nextn_predict_layers > 0
-    // For now, we'll check if the model is GLM4-based architecture
+    // Get model layer count to identify MTP-capable models
+    const int n_layer = llama_model_n_layer(model);
     
+    // Check for known GLM4 models with NextN/MTP layers:
+    // - GLM-4.5-Air has 47 layers (46 transformer + 1 NextN)
+    // - GLM-4.5 has 93 layers (92 transformer + 1 NextN)
+    bool is_glm4_mtp = (n_layer == 47 || n_layer == 93);
+    
+    if (is_glm4_mtp) {
+        LOG_INF("%s: MTP available for GLM4 model with %d layers\n", __func__, n_layer);
+        return true;
+    }
+    
+    // Future: Add proper hparams check when available
     // TODO: Access model hparams to check nextn_predict_layers > 0
     // const auto & hparams = llama_model_hparams(model);
     // return hparams.nextn_predict_layers > 0;
     
-    // Temporary implementation: assume MTP is available for specific model sizes
-    // that are known to have NextN layers (like GLM-4.5-Air with 47 layers)
-    const int n_layer = llama_model_n_layer(model);
-    
-    // GLM-4.5-Air has 47 layers (46 transformer + 1 NextN)
-    // GLM-4.5 has 93 layers (92 transformer + 1 NextN)
-    if (n_layer == 47 || n_layer == 93) {
-        LOG_INF("%s: MTP likely available for model with %d layers\n", __func__, n_layer);
-        return true;
-    }
-    
+    LOG_DBG("%s: MTP not available for model with %d layers\n", __func__, n_layer);
     return false;
 }

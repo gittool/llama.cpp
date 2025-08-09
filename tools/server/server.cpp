@@ -3517,7 +3517,33 @@ struct server_context {
 
                 const int tok_idx = slot.i_batch - i;
 
-                llama_token id = common_sampler_sample(slot.smpl, ctx, tok_idx);
+                // Try MTP (Multi-Token Prediction) if available
+                std::vector<llama_token> predicted_tokens;
+                bool used_mtp = false;
+                
+                // Check if MTP is available and enabled
+                if (common_sampler_can_use_mtp(ctx)) {
+                    // Use MTP to predict multiple tokens at once
+                    predicted_tokens = common_sampler_sample_mtp(
+                        slot.smpl, ctx, tok_idx, 
+                        4,    // predict up to 4 tokens
+                        0.7f  // acceptance threshold
+                    );
+                    
+                    if (predicted_tokens.size() > 1) {
+                        used_mtp = true;
+                        SRV_DBG("MTP predicted %zu tokens for slot %d\n", predicted_tokens.size(), slot.id);
+                    }
+                }
+                
+                llama_token id;
+                if (used_mtp && !predicted_tokens.empty()) {
+                    // Use first token from MTP prediction
+                    id = predicted_tokens[0];
+                } else {
+                    // Fallback to standard sampling
+                    id = common_sampler_sample(slot.smpl, ctx, tok_idx);
+                }
 
                 slot.i_batch = -1;
 
