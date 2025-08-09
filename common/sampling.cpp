@@ -604,7 +604,12 @@ std::vector<llama_token> common_sampler_sample_mtp(
     
     std::vector<llama_token> predicted_tokens;
     
+    // Log MTP call for debugging
+    LOG_DBG("%s: attempting MTP with %d tokens, threshold %.3f\n", 
+            __func__, n_predict_tokens, acceptance_threshold);
+    
     if (!sampler || !ctx || n_predict_tokens <= 0) {
+        LOG_DBG("%s: invalid parameters, returning empty\n", __func__);
         return predicted_tokens;
     }
 
@@ -627,6 +632,8 @@ std::vector<llama_token> common_sampler_sample_mtp(
     }
     
     if (!has_mtp_layers) {
+        LOG_DBG("%s: no MTP layers detected (n_layer=%d, n_mtp_layers=%d), fallback to single token\n", 
+                __func__, n_layer, n_mtp_layers);
         // Fallback to single token sampling
         llama_token token = common_sampler_sample(sampler, ctx, idx);
         if (token != LLAMA_TOKEN_NULL) {
@@ -635,9 +642,12 @@ std::vector<llama_token> common_sampler_sample_mtp(
         return predicted_tokens;
     }
     
+    LOG_DBG("%s: MTP layers detected, attempting multi-token prediction\n", __func__);
+    
     // Get logits for current position
     const float * logits = llama_get_logits_ith(ctx, idx);
     if (!logits) {
+        LOG_DBG("%s: no logits available, returning empty\n", __func__);
         return predicted_tokens;
     }
 
@@ -700,8 +710,14 @@ std::vector<llama_token> common_sampler_sample_mtp(
                 __func__, best_token, max_prob);
     }
     
-    LOG_DBG("%s: predicted %zu tokens with MTP (requested %d)\n", 
-            __func__, predicted_tokens.size(), n_predict_tokens);
+    // Always log MTP usage at INFO level for debugging
+    if (predicted_tokens.size() > 1) {
+        LOG_INF("%s: MTP successfully predicted %zu tokens (requested %d)\n", 
+                __func__, predicted_tokens.size(), n_predict_tokens);
+    } else {
+        LOG_INF("%s: MTP fallback to single token prediction (requested %d)\n", 
+                __func__, n_predict_tokens);
+    }
     
     return predicted_tokens;
 }// Check if MTP should be enabled based on model architecture
@@ -730,7 +746,12 @@ bool common_sampler_can_use_mtp(struct llama_context * ctx) {
     }
     
     if (is_glm4_mtp) {
-        LOG_INF("%s: MTP available for model with %d layers (%d MTP layers)\n", __func__, n_layer, n_mtp_layers);
+        // Use static variable to log only once per model
+        static bool mtp_logged = false;
+        if (!mtp_logged) {
+            LOG_INF("%s: MTP available for model with %d layers (%d MTP layers)\n", __func__, n_layer, n_mtp_layers);
+            mtp_logged = true;
+        }
         return true;
     }
     
