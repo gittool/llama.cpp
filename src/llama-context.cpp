@@ -8,6 +8,7 @@
 #include "llama-model.h"
 
 #include <cinttypes>
+#include <cmath>
 #include <cstring>
 #include <limits>
 #include <stdexcept>
@@ -2950,12 +2951,12 @@ int32_t llama_model_n_mtp_layers(const struct llama_model * model) {
 }
 
 bool llama_context_can_use_mtp(const struct llama_context * ctx) {
-    if (!ctx || !ctx->model) {
+    if (!ctx) {
         return false;
     }
     
-    // Check if model supports MTP and context is ready
-    return llama_model_has_mtp_support(ctx->model) && ctx->kv_self.head >= 0;
+    // Check if model supports MTP using the public get_model() method
+    return llama_model_has_mtp_support(&ctx->get_model());
 }
 
 int32_t llama_predict_mtp_tokens(
@@ -2978,7 +2979,7 @@ int32_t llama_predict_mtp_tokens(
         return 0;
     }
     
-    const int32_t n_vocab = llama_vocab_n_tokens(llama_model_get_vocab(ctx->model));
+    const int32_t n_vocab = llama_vocab_n_tokens(llama_model_get_vocab(&ctx->get_model()));
     int32_t n_predicted = 0;
     
     // For MTP-enabled models, predict multiple tokens
@@ -3001,10 +3002,10 @@ int32_t llama_predict_mtp_tokens(
         // Calculate confidence using softmax probability
         float sum_exp = 0.0f;
         for (int32_t v = 0; v < n_vocab; ++v) {
-            sum_exp += std::exp(token_logits[v] - max_logit);
+            sum_exp += expf(token_logits[v] - max_logit);
         }
         
-        const float max_prob = std::exp(max_logit - max_logit) / sum_exp;
+        const float max_prob = expf(max_logit - max_logit) / sum_exp;
         
         // Check confidence threshold
         if (max_prob < confidence_threshold) {
@@ -3020,7 +3021,7 @@ int32_t llama_predict_mtp_tokens(
         n_predicted++;
         
         // Stop at EOS token
-        if (best_token == llama_vocab_eos(llama_model_get_vocab(ctx->model))) {
+        if (best_token == llama_vocab_eos(llama_model_get_vocab(&ctx->get_model()))) {
             break;
         }
     }
