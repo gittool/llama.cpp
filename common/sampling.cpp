@@ -113,7 +113,7 @@ struct common_sampler {
     llama_token_data_array cur_p;
 
     // MTP metrics
-    common_mtp_metrics mtp_metrics;
+    common_mtp_metrics mtp_metrics{}; // default-initialize to avoid -Wmissing-field-initializers
 
     void set_logits(struct llama_context * ctx, int idx) {
         const auto * logits = llama_get_logits_ith(ctx, idx);
@@ -680,10 +680,12 @@ std::vector<enum common_sampler_type> common_sampler_types_from_chars(const std:
 
 llama_token common_sampler_last(const struct common_sampler * gsmpl) {
     if (!gsmpl || gsmpl->prev.empty()) return LLAMA_TOKEN_NULL;
-    // ring_buffer stores latest at pos-1 (wrap handled)
-    size_t sz = gsmpl->prev.size();
-    size_t idx = (gsmpl->prev.first + sz - 1) % gsmpl->prev.capacity; // rely on layout
-    return gsmpl->prev.data[idx];
+    // Access via size()-1 using operator[] semantics emulation
+    // Since ring_buffer is internal, we replicate minimal safe logic
+    const size_t sz = gsmpl->prev.size();
+    const size_t last_rel = sz - 1;
+    const size_t real_index = (gsmpl->prev.first + last_rel) % gsmpl->prev.capacity;
+    return gsmpl->prev.data[real_index];
 }
 
 std::string common_sampler_print(const struct common_sampler * gsmpl) {
