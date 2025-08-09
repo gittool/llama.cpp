@@ -3576,6 +3576,27 @@ struct server_context {
                     accepted = 1;
                 }
 
+                // 利用状況ログ (verbosity: DEBUG)。以下条件で出力:
+                //  - 追加トークンを予測できた (predicted_extra>0)
+                //  - またはメトリクス呼び出し回数が 32 の倍数 (スパム防止)
+                if (slot.params.sampling.mtp_enabled) {
+                    const common_mtp_metrics * mm = common_sampler_get_mtp_metrics(slot.smpl);
+                    if (mm) {
+                        const bool periodic = (mm->calls & 0x1F) == 1; // 32毎 (callsは sampling.cpp 側で +1 済みのはず)
+                        if (predicted_extra > 0 || periodic) {
+                            SRV_DBG("MTP log slot=%d used=%d first=%d extra=%d avg_accept=%.2f calls=%llu extra_total=%llu first_only=%llu\n",
+                                slot.id,
+                                (int) mtp_used,
+                                1,
+                                predicted_extra,
+                                (float)(mm->ema_accept_len),
+                                (unsigned long long) mm->calls,
+                                (unsigned long long) mm->tokens_extra,
+                                (unsigned long long) mm->tokens_first_only);
+                        }
+                    }
+                }
+
                 // 将来 fast-accept 実装箇所:
                 if (mtp_used && predicted_extra > 0 && llama_context_can_speculative_mtp(ctx)) {
                     // int fast = llama_accept_predicted_tokens(ctx, slot.n_past - 1, predicted_extra, mtp_tokens.data() + 1);
