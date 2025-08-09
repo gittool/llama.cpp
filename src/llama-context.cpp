@@ -9,6 +9,9 @@
 
 #include <cinttypes>
 #include <cmath>
+#if defined(__AVX2__)
+#include <immintrin.h>
+#endif
 #include <cstring>
 #include <limits>
 #include <stdexcept>
@@ -2983,48 +2986,94 @@ int32_t llama_predict_mtp_tokens(
     int32_t n_predicted = 0;
     
     // For MTP-enabled models, predict multiple tokens
+    const bool use_margin = (confidence_threshold < 0.0f);
+    const float margin_threshold = use_margin ? -confidence_threshold : 0.0f;
     for (int32_t i = 0; i < n_predict; ++i) {
-        // Access logits for the i-th predicted token
-        // Note: This assumes NextN layers produce concatenated vocab distributions
         const float * token_logits = logits + (i * n_vocab);
-        
-        // Find the most probable token using argmax
-        float max_logit = token_logits[0];
-        llama_token best_token = 0;
-        
-        for (int32_t v = 1; v < n_vocab; ++v) {
-            if (token_logits[v] > max_logit) {
-                max_logit = token_logits[v];
-                best_token = static_cast<llama_token>(v);
+        // single pass (with optional SIMD) tracking max1, max2, log-sum-exp
+        float max1;
+        float max2;
+        int   idx1;
+        double lse; // sum_{v} exp(logit_v - max1)
+
+#if defined(__AVX2__)
+        // AVX2 path: find max and second max (two passes: first for max, second for lse+second)
+        // Rationale: full fused single pass with second-max tracking in SIMD is complex; a 2-pass SIMD beats scalar O(n)
+        // Pass 1: max
+        __m256 vmax = _mm256_set1_ps(-INFINITY);
+        __m256i vidx = _mm256_setzero_si256();
+        int best_index = 0;
+        for (int v = 0; v <= n_vocab - 8; v += 8) {
+            __m256 x = _mm256_loadu_ps(token_logits + v);
+            __m256 cmp = _mm256_cmp_ps(x, vmax, _CMP_GT_OQ);
+            // blend updates
+            vmax = _mm256_blendv_ps(vmax, x, cmp);
+            // Extract lane-wise later; track scalar fallback for index
+            // (simplify: compute scalar segment)
+            for (int k = 0; k < 8; ++k) {
+                float val = token_logits[v + k];
+                if (v == 0 && k == 0) { max1 = val; best_index = 0; }
+                if (val > max1) { max1 = val; best_index = v + k; }
             }
         }
-        
-        // Calculate confidence using softmax probability
-        float sum_exp = 0.0f;
-        for (int32_t v = 0; v < n_vocab; ++v) {
-            sum_exp += expf(token_logits[v] - max_logit);
+        // tail
+        for (int v = (n_vocab & ~7); v < n_vocab; ++v) {
+            float val = token_logits[v];
+            if (v == 0) { max1 = val; best_index = 0; }
+            if (val > max1) { max1 = val; best_index = v; }
         }
-        
-        const float max_prob = expf(max_logit - max_logit) / sum_exp;
-        
-        // Check confidence threshold
-        if (max_prob < confidence_threshold) {
-            break; // Stop if confidence is too low
+        idx1 = best_index;
+        // Pass 2: second max + lse
+        max2 = -INFINITY;
+        lse = 0.0;
+        for (int v = 0; v < n_vocab; ++v) {
+            float x = token_logits[v];
+            if (v != idx1 && x > max2) max2 = x;
+            lse += expf(x - max1);
         }
-        
-        // Validate token
-        if (best_token >= n_vocab || best_token < 0) {
-            break;
+#else
+        // Scalar single-pass approximate fused approach
+        max1 = token_logits[0];
+        max2 = -INFINITY;
+        idx1 = 0;
+        lse = 1.0; // exp(0) for first element
+        for (int32_t v = 1; v < n_vocab; ++v) {
+            float x = token_logits[v];
+            if (x > max1) {
+                // rescale existing lse relative to new max
+                lse = lse * expf(max1 - x) + 1.0f;
+                max2 = max1;
+                max1 = x;
+                idx1 = v;
+            } else {
+                if (x > max2) max2 = x;
+                lse += expf(x - max1);
+            }
         }
-        
-        tokens[n_predicted] = best_token;
-        n_predicted++;
-        
-        // Stop at EOS token
-        if (best_token == llama_vocab_eos(llama_model_get_vocab(&ctx->get_model()))) {
-            break;
+#endif
+        float prob1 = 1.0f / (float)lse; // probability of best token
+        float margin = max1 - max2;      // logit margin
+
+        bool accept;
+        if (use_margin) {
+            accept = margin >= margin_threshold;
+        } else {
+            accept = prob1 >= confidence_threshold;
         }
+        if (!accept) break;
+        if (idx1 >= n_vocab || idx1 < 0) break;
+        tokens[n_predicted++] = (llama_token)idx1;
+        if (idx1 == llama_vocab_eos(llama_model_get_vocab(&ctx->get_model()))) break;
     }
     
     return n_predicted;
 }
+
+// NOTE (Speculative integration placeholder):
+// 真の forward 削減を行う speculative verification には「予測した複数トークン分の中間 hidden/KV」を同時生成または
+// draft モデルで生成 -> target 1 forward で検証 という構造が必要。
+// 現行 NextN 実装は logits 連結のみで中間 state を出力していないため、ここでは MTP を
+// speculative の draft token 提供源とする統合は API レベルで未実装。
+// 将来的に NextN 層から中間埋め込みを取得できる拡張が行われた際に、
+// ここに verification パス (batched compare) を追加して複数 step の llama_decode をスキップ可能。
+

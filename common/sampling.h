@@ -114,6 +114,9 @@ llama_sampler * llama_sampler_init_llg(const llama_vocab * vocab,
 void common_sampler_init_mtp(struct common_sampler * sampler, int n_predict_tokens);
 
 // Sample multiple tokens using MTP (Multi-Token Prediction)
+// acceptance_threshold:
+//   - 通常: 0.0-1.0 の確率しきい値
+//   - margin モード有効時 (mtp_use_margin=true): 無視され内部で負値に変換され logit margin 閾値として扱われる
 std::vector<llama_token> common_sampler_sample_mtp(
         struct common_sampler * sampler,
         struct llama_context * ctx,
@@ -121,5 +124,35 @@ std::vector<llama_token> common_sampler_sample_mtp(
         int n_predict_tokens,
         float acceptance_threshold);
 
+// Sample & 受理 (accept) まで行うユーティリティ
+//  - 先頭トークン: 通常サンプリングチェーン + (必要なら) grammar
+//  - 2個目以降: MTP 予測 (grammar が有効な場合は安全のため停止)
+// 返り値: 実際に accept 済みのトークン列 (少なくとも1個)
+std::vector<llama_token> common_sampler_sample_and_accept_mtp(
+        struct common_sampler * sampler,
+        struct llama_context * ctx,
+        int idx,
+        int n_predict_tokens,
+        float acceptance_threshold,
+        bool  grammar_first = false);
+
 // Check if MTP should be enabled based on model architecture
-bool common_sampler_can_use_mtp(struct llama_context * ctx);
+// サンプラパラメータ (enabled / grammar 無効 等) も考慮した包括的判定
+bool common_sampler_can_use_mtp(struct common_sampler * sampler, struct llama_context * ctx);
+
+// MTP runtime metrics (軽量集計)
+struct common_mtp_metrics {
+        uint64_t calls              = 0;   // number of MTP attempts
+        uint64_t tokens_first_only  = 0;   // only first token produced (fallback)
+        uint64_t tokens_extra       = 0;   // extra tokens predicted (accepted)
+        double   ema_accept_len     = 1.0; // EMA of accepted tokens per forward
+};
+
+// 収集された metrics を取得 (nullptr なら空)
+const common_mtp_metrics * common_sampler_get_mtp_metrics(const struct common_sampler * sampler);
+
+// MTP 動的調整: 内部で n_predict_tokens を最適化 (戻り値: 現在値)
+int common_sampler_mtp_adapt(struct common_sampler * sampler);
+
+// 既存互換: 古い呼び出し箇所向け (将来削除予定)
+inline bool common_sampler_can_use_mtp(struct llama_context * ctx) { return common_sampler_can_use_mtp(nullptr, ctx); }

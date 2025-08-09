@@ -112,6 +112,9 @@ struct common_sampler {
 
     llama_token_data_array cur_p;
 
+    // MTP metrics
+    common_mtp_metrics mtp_metrics;
+
     void set_logits(struct llama_context * ctx, int idx) {
         const auto * logits = llama_get_logits_ith(ctx, idx);
 
@@ -430,331 +433,164 @@ llama_token_data_array * common_sampler_get_candidates(struct common_sampler * g
     return &gsmpl->cur_p;
 }
 
-llama_token common_sampler_last(const struct common_sampler * gsmpl) {
-    return gsmpl->prev.rat(0);
-}
-
-std::string common_sampler_print(const struct common_sampler * gsmpl) {
-    std::string result = "logits ";
-
-    for (int i = 0; i < llama_sampler_chain_n(gsmpl->chain); i++) {
-        const auto * smpl = llama_sampler_chain_get(gsmpl->chain, i);
-        result += std::string("-> ") + llama_sampler_name(smpl) + " ";
-    }
-
-    return result;
-}
-
-std::string common_sampler_prev_str(common_sampler * gsmpl, llama_context * ctx_main, int n) {
-    n = std::min(n, (int) gsmpl->prev.size());
-
-    if (n <= 0) {
-        return "";
-    }
-
-    std::string result;
-    result.reserve(8*n); // 8 is the average length of a token [citation needed], TODO: compute this from the vocab
-
-    for (int i = n - 1; i >= 0; i--) {
-        const llama_token id = gsmpl->prev.rat(i);
-
-        GGML_ASSERT(id != LLAMA_TOKEN_NULL && "null token in the sampling history - should not happen");
-
-        result += common_token_to_piece(ctx_main, id);
-    }
-
-    return result;
-}
-
-char common_sampler_type_to_chr(enum common_sampler_type cnstr) {
-    switch (cnstr) {
-        case COMMON_SAMPLER_TYPE_DRY:         return 'd';
-        case COMMON_SAMPLER_TYPE_TOP_K:       return 'k';
-        case COMMON_SAMPLER_TYPE_TYPICAL_P:   return 'y';
-        case COMMON_SAMPLER_TYPE_TOP_P:       return 'p';
-        case COMMON_SAMPLER_TYPE_TOP_N_SIGMA: return 's';
-        case COMMON_SAMPLER_TYPE_MIN_P:       return 'm';
-        case COMMON_SAMPLER_TYPE_TEMPERATURE: return 't';
-        case COMMON_SAMPLER_TYPE_XTC:         return 'x';
-        case COMMON_SAMPLER_TYPE_INFILL:      return 'i';
-        case COMMON_SAMPLER_TYPE_PENALTIES:   return 'e';
-        default : return '?';
-    }
-}
-
-std::string common_sampler_type_to_str(enum common_sampler_type cnstr) {
-    switch (cnstr) {
-        case COMMON_SAMPLER_TYPE_DRY:         return "dry";
-        case COMMON_SAMPLER_TYPE_TOP_K:       return "top_k";
-        case COMMON_SAMPLER_TYPE_TYPICAL_P:   return "typ_p";
-        case COMMON_SAMPLER_TYPE_TOP_P:       return "top_p";
-        case COMMON_SAMPLER_TYPE_TOP_N_SIGMA: return "top_n_sigma";
-        case COMMON_SAMPLER_TYPE_MIN_P:       return "min_p";
-        case COMMON_SAMPLER_TYPE_TEMPERATURE: return "temperature";
-        case COMMON_SAMPLER_TYPE_XTC:         return "xtc";
-        case COMMON_SAMPLER_TYPE_INFILL:      return "infill";
-        case COMMON_SAMPLER_TYPE_PENALTIES:   return "penalties";
-        default : return "";
-    }
-}
-
-std::vector<common_sampler_type> common_sampler_types_from_names(const std::vector<std::string> & names, bool allow_alt_names) {
-    std::unordered_map<std::string, common_sampler_type> sampler_canonical_name_map {
-        { "dry",         COMMON_SAMPLER_TYPE_DRY },
-        { "top_k",       COMMON_SAMPLER_TYPE_TOP_K },
-        { "top_p",       COMMON_SAMPLER_TYPE_TOP_P },
-        { "top_n_sigma", COMMON_SAMPLER_TYPE_TOP_N_SIGMA },
-        { "typ_p",       COMMON_SAMPLER_TYPE_TYPICAL_P },
-        { "min_p",       COMMON_SAMPLER_TYPE_MIN_P },
-        { "temperature", COMMON_SAMPLER_TYPE_TEMPERATURE },
-        { "xtc",         COMMON_SAMPLER_TYPE_XTC },
-        { "infill",      COMMON_SAMPLER_TYPE_INFILL },
-        { "penalties",   COMMON_SAMPLER_TYPE_PENALTIES },
-    };
-
-    // since samplers names are written multiple ways
-    // make it ready for both system names and input names
-    std::unordered_map<std::string, common_sampler_type> sampler_alt_name_map {
-        { "top-k",       COMMON_SAMPLER_TYPE_TOP_K },
-        { "top-p",       COMMON_SAMPLER_TYPE_TOP_P },
-        { "top-n-sigma", COMMON_SAMPLER_TYPE_TOP_N_SIGMA },
-        { "nucleus",     COMMON_SAMPLER_TYPE_TOP_P },
-        { "typical-p",   COMMON_SAMPLER_TYPE_TYPICAL_P },
-        { "typical",     COMMON_SAMPLER_TYPE_TYPICAL_P },
-        { "typ-p",       COMMON_SAMPLER_TYPE_TYPICAL_P },
-        { "typ",         COMMON_SAMPLER_TYPE_TYPICAL_P },
-        { "min-p",       COMMON_SAMPLER_TYPE_MIN_P },
-        { "temp",        COMMON_SAMPLER_TYPE_TEMPERATURE },
-    };
-
-    std::vector<common_sampler_type> samplers;
-    samplers.reserve(names.size());
-
-    for (const auto & name : names) {
-        auto sampler = sampler_canonical_name_map.find(name);
-        if (sampler != sampler_canonical_name_map.end()) {
-            samplers.push_back(sampler->second);
-            continue;
-        }
-        if (allow_alt_names) {
-            sampler = sampler_alt_name_map.find(name);
-            if (sampler != sampler_alt_name_map.end()) {
-                samplers.push_back(sampler->second);
-                continue;
-            }
-        }
-        LOG_WRN("%s: unable to match sampler by name '%s'\n", __func__, name.c_str());
-    }
-
-    return samplers;
-}
-
-std::vector<common_sampler_type> common_sampler_types_from_chars(const std::string & chars) {
-    std::unordered_map<char, common_sampler_type> sampler_name_map = {
-        { common_sampler_type_to_chr(COMMON_SAMPLER_TYPE_DRY),         COMMON_SAMPLER_TYPE_DRY },
-        { common_sampler_type_to_chr(COMMON_SAMPLER_TYPE_TOP_K),       COMMON_SAMPLER_TYPE_TOP_K },
-        { common_sampler_type_to_chr(COMMON_SAMPLER_TYPE_TYPICAL_P),   COMMON_SAMPLER_TYPE_TYPICAL_P },
-        { common_sampler_type_to_chr(COMMON_SAMPLER_TYPE_TOP_P),       COMMON_SAMPLER_TYPE_TOP_P },
-        { common_sampler_type_to_chr(COMMON_SAMPLER_TYPE_TOP_N_SIGMA), COMMON_SAMPLER_TYPE_TOP_N_SIGMA },
-        { common_sampler_type_to_chr(COMMON_SAMPLER_TYPE_MIN_P),       COMMON_SAMPLER_TYPE_MIN_P },
-        { common_sampler_type_to_chr(COMMON_SAMPLER_TYPE_TEMPERATURE), COMMON_SAMPLER_TYPE_TEMPERATURE },
-        { common_sampler_type_to_chr(COMMON_SAMPLER_TYPE_XTC),         COMMON_SAMPLER_TYPE_XTC },
-        { common_sampler_type_to_chr(COMMON_SAMPLER_TYPE_INFILL),      COMMON_SAMPLER_TYPE_INFILL },
-        { common_sampler_type_to_chr(COMMON_SAMPLER_TYPE_PENALTIES),   COMMON_SAMPLER_TYPE_PENALTIES },
-    };
-
-    std::vector<common_sampler_type> samplers;
-    samplers.reserve(chars.size());
-
-    for (const auto & c : chars) {
-        const auto sampler = sampler_name_map.find(c);
-        if (sampler != sampler_name_map.end()) {
-            samplers.push_back(sampler->second);
-        }
-    }
-
-    return samplers;
-}
-
-//
-// Multi-Token Prediction (MTP) functions
-//
-
 // Initialize MTP state for a model with NextN layers
 void common_sampler_init_mtp(struct common_sampler * sampler, int n_predict_tokens) {
     if (!sampler || n_predict_tokens <= 0) {
         return;
     }
-    
-    // Enable MTP with specified prediction count
-    // This will be used by the sampling process to predict multiple tokens in parallel
     sampler->params.n_predict_tokens = std::max(1, n_predict_tokens);
     sampler->params.mtp_enabled = true;
-    
-    LOG_INF("%s: initialized MTP with %d prediction tokens\n", __func__, n_predict_tokens);
+    LOG_INF("%s: initialized MTP (n_predict_tokens=%d)\n", __func__, sampler->params.n_predict_tokens);
 }
 
-// Sample multiple tokens using MTP (Multi-Token Prediction)
+// Capability check (considers sampler params & model)
+bool common_sampler_can_use_mtp(struct common_sampler * sampler, struct llama_context * ctx) {
+    if (!ctx) return false;
+    if (sampler && (!sampler->params.mtp_enabled || sampler->params.n_predict_tokens <= 0)) return false;
+    if (!llama_context_can_use_mtp(ctx)) return false; // core API check
+    const struct llama_model * model = llama_get_model(ctx);
+    if (!model) return false;
+    const int32_t n_mtp = llama_model_n_mtp_layers(model);
+    if (n_mtp <= 0) return false;
+    return true;
+}
+
+const common_mtp_metrics * common_sampler_get_mtp_metrics(const struct common_sampler * sampler) {
+    if (!sampler || !sampler->params.mtp_enabled) return nullptr;
+    return &sampler->mtp_metrics;
+}
+
+int common_sampler_mtp_adapt(struct common_sampler * sampler) {
+    if (!sampler || !sampler->params.mtp_enabled) return 0;
+    // Simple proportional control towards target average length
+    const double target = sampler->params.mtp_target_avg_len;
+    const double cur    = sampler->mtp_metrics.ema_accept_len;
+    double delta = (target - cur) * sampler->params.mtp_adapt_rate;
+    int new_n = sampler->params.n_predict_tokens;
+    if (delta > 0.10) { // significant gap
+        new_n += 1;
+    } else if (delta < -0.10) {
+        new_n -= 1;
+    }
+    new_n = std::max(1, std::min(sampler->params.mtp_max_predict, new_n));
+    sampler->params.n_predict_tokens = new_n;
+    return new_n;
+}
+
+// Low-level multi-token sampling (no accept) using core API if available
 std::vector<llama_token> common_sampler_sample_mtp(
         struct common_sampler * sampler,
         struct llama_context * ctx,
         int idx,
         int n_predict_tokens,
         float acceptance_threshold) {
-    
-    std::vector<llama_token> predicted_tokens;
-    
-    // Log MTP call for debugging
-    LOG_DBG("%s: attempting MTP with %d tokens, threshold %.3f\n", 
-            __func__, n_predict_tokens, acceptance_threshold);
-    
-    if (!sampler || !ctx || n_predict_tokens <= 0) {
-        LOG_DBG("%s: invalid parameters, returning empty\n", __func__);
-        return predicted_tokens;
+    std::vector<llama_token> out;
+    if (!sampler || !ctx || n_predict_tokens <= 0) return out;
+
+    // Always sample the first token via existing chain to keep behavior consistent
+    llama_token first = common_sampler_sample(sampler, ctx, idx);
+    if (first == LLAMA_TOKEN_NULL) return out;
+    out.push_back(first);
+
+    if (!common_sampler_can_use_mtp(sampler, ctx)) {
+        LOG_DBG("%s: MTP not usable -> single token only\n", __func__);
+        if (sampler->params.mtp_enabled) {
+            sampler->mtp_metrics.calls++;
+            sampler->mtp_metrics.tokens_first_only++;
+            sampler->mtp_metrics.ema_accept_len = 0.9 * sampler->mtp_metrics.ema_accept_len + 0.1 * 1.0;
+        }
+        return out;
     }
 
-    const struct llama_model * model = llama_get_model(ctx);
-    if (!model) {
-        return predicted_tokens;
+    // If grammar is active AND not grammar_first, 2nd 以降の MTP 予測は grammar 未検証になるため安全のため今は停止 (TODO: grammar 適用)
+    if (sampler->grmr && !sampler->params.grammar.empty()) {
+        LOG_DBG("%s: grammar active -> disable multi-token extension (TODO)\n", __func__);
+        return out;
     }
 
-    // Check if the model has NextN/MTP layers
-    const int n_vocab = llama_vocab_n_tokens(llama_model_get_vocab(model));
-    const int n_layer = llama_model_n_layer(model);
-    
-    // For GLM4 models with MTP layers, check for NextN support
-    bool has_mtp_layers = (n_layer == 47 || n_layer == 93); // GLM-4.5-Air or GLM-4.5
-    
-    // Also check model architecture to confirm MTP support using API
-    int32_t n_mtp_layers = llama_model_n_mtp_layers(model);
-    if (n_mtp_layers > 0) {
-        has_mtp_layers = true;
+    const int want_extra = std::min({n_predict_tokens, sampler->params.n_predict_tokens, sampler->params.mtp_max_predict}) - 1;
+    if (want_extra <= 0) return out;
+
+    std::vector<llama_token> buf(want_extra);
+    float thr = acceptance_threshold;
+    if (sampler->params.mtp_use_margin) {
+        // margin モード: 符号付きで API に渡す (負値 = margin threshold)
+        thr = -sampler->params.mtp_margin_thresh;
     }
-    
-    if (!has_mtp_layers) {
-        LOG_DBG("%s: no MTP layers detected (n_layer=%d, n_mtp_layers=%d), fallback to single token\n", 
-                __func__, n_layer, n_mtp_layers);
-        // Fallback to single token sampling
-        llama_token token = common_sampler_sample(sampler, ctx, idx);
-        if (token != LLAMA_TOKEN_NULL) {
-            predicted_tokens.push_back(token);
+    int32_t predicted = llama_predict_mtp_tokens(ctx, idx, want_extra, thr, buf.data());
+    if (predicted > 0) {
+        out.insert(out.end(), buf.begin(), buf.begin() + predicted);
+    }
+    LOG_DBG("%s: produced %zu tokens (requested=%d, extra=%d, accepted_extra=%d)\n", __func__, out.size(), n_predict_tokens, want_extra, predicted);
+
+    if (sampler->params.mtp_enabled) {
+        sampler->mtp_metrics.calls++;
+        if (predicted == 0) {
+            sampler->mtp_metrics.tokens_first_only++;
+        } else {
+            sampler->mtp_metrics.tokens_extra += predicted;
         }
-        return predicted_tokens;
+        const double accept_len = 1.0 + std::max(0, predicted);
+        sampler->mtp_metrics.ema_accept_len = 0.9 * sampler->mtp_metrics.ema_accept_len + 0.1 * accept_len;
+        // adapt occasionally
+        if ((sampler->mtp_metrics.calls & 0x1F) == 0) {
+            common_sampler_mtp_adapt(sampler);
+        }
     }
-    
-    LOG_DBG("%s: MTP layers detected, attempting multi-token prediction\n", __func__);
-    
-    // Get logits for current position
-    const float * logits = llama_get_logits_ith(ctx, idx);
-    if (!logits) {
-        LOG_DBG("%s: no logits available, returning empty\n", __func__);
-        return predicted_tokens;
+    return out;
+}
+
+std::vector<llama_token> common_sampler_sample_and_accept_mtp(
+        struct common_sampler * sampler,
+        struct llama_context * ctx,
+        int idx,
+        int n_predict_tokens,
+        float acceptance_threshold,
+        bool  grammar_first) {
+    auto tokens = common_sampler_sample_mtp(sampler, ctx, idx, n_predict_tokens, acceptance_threshold);
+    if (tokens.empty()) return tokens;
+
+    const bool grammar_active = sampler->grmr && !sampler->params.grammar.empty();
+
+    // grammar_first は全候補が grammar 制約下であることを要求するため安全策として multi 生成を抑止
+    if (grammar_first && grammar_active) {
+        common_sampler_accept(sampler, tokens[0], true);
+        tokens.resize(1);
+        LOG_DBG("%s: grammar_first enabled -> MTP extra tokens disabled\n", __func__);
+        return tokens;
     }
 
-    // For MTP-enabled models, the forward pass should produce logits for multiple tokens
-    // The logits array should contain predictions for multiple future tokens
-    // arranged as [vocab_size * n_predict_tokens] where each vocab_size chunk
-    // represents the probability distribution for the next token
-    
-    // Sample first token using standard sampling
-    llama_token first_token = common_sampler_sample(sampler, ctx, idx);
-    if (first_token == LLAMA_TOKEN_NULL) {
-        return predicted_tokens;
-    }
-    predicted_tokens.push_back(first_token);
-    
-    // For additional tokens, use MTP predictions
-    for (int i = 1; i < n_predict_tokens; ++i) {
-        // Access logits for the i-th predicted token
-        // Note: This assumes the NextN layers produce concatenated vocab distributions
-        const float * token_logits = logits + (i * n_vocab);
-        
-        // Find the most probable token using argmax
-        float max_logit = token_logits[0];
-        llama_token best_token = 0;
-        
-        for (int v = 1; v < n_vocab; ++v) {
-            if (token_logits[v] > max_logit) {
-                max_logit = token_logits[v];
-                best_token = v;
-            }
+    // 先頭トークンは従来通り grammar 適用
+    common_sampler_accept(sampler, tokens[0], true);
+
+    if (!grammar_active) {
+        // grammar 無し: 追加トークンをそのまま受理
+        for (size_t i = 1; i < tokens.size(); ++i) {
+            common_sampler_accept(sampler, tokens[i], false);
         }
-        
-        // Apply acceptance threshold using softmax probability
-        // Calculate softmax for confidence estimation
-        float sum_exp = 0.0f;
-        const float max_for_softmax = max_logit;
-        
-        for (int v = 0; v < n_vocab; ++v) {
-            sum_exp += expf(token_logits[v] - max_for_softmax);
+        return tokens;
+    }
+
+    // grammar 有効: 追加トークンを逐次検証
+    std::vector<llama_token> accepted;
+    accepted.reserve(tokens.size());
+    accepted.push_back(tokens[0]);
+
+    for (size_t i = 1; i < tokens.size(); ++i) {
+        llama_token tok = tokens[i];
+        llama_token_data single { tok, 1.0f, 0.0f };
+        llama_token_data_array arr { &single, 1, -1, false };
+        llama_sampler_apply(sampler->grmr, &arr);
+        const bool valid = arr.data[0].logit != -INFINITY;
+        if (!valid) {
+            LOG_DBG("%s: grammar rejected MTP token %d at pos %zu -> stop extension\n", __func__, tok, i);
+            break; // 以降は破棄
         }
-        
-        const float max_prob = expf(max_logit - max_for_softmax) / sum_exp;
-        
-        // Check confidence threshold
-        if (max_prob < acceptance_threshold) {
-            LOG_DBG("%s: rejecting token %d with probability %.3f (below threshold %.3f)\n", 
-                    __func__, best_token, max_prob, acceptance_threshold);
-            break; // Stop predicting if confidence is too low
-        }
-        
-        // Additional checks for reasonable tokens
-        if (best_token >= n_vocab || best_token < 0) {
-            LOG_DBG("%s: rejecting invalid token %d\n", __func__, best_token);
-            break;
-        }
-        
-        predicted_tokens.push_back(best_token);
-        
-        LOG_DBG("%s: accepted token %d with probability %.3f\n", 
-                __func__, best_token, max_prob);
+        // grammar state を前進
+        common_sampler_accept(sampler, tok, true);
+        accepted.push_back(tok);
+    // TODO (DFA fast path): grammar sampler 内部 DFA 状態を複製しベクトル化検証することで
+    // ここを O(k) -> O(1) バルク検証に最適化可能。現状は逐次。
     }
-    
-    // Always log MTP usage at INFO level for debugging
-    if (predicted_tokens.size() > 1) {
-        LOG_INF("%s: MTP successfully predicted %zu tokens (requested %d)\n", 
-                __func__, predicted_tokens.size(), n_predict_tokens);
-    } else {
-        LOG_INF("%s: MTP fallback to single token prediction (requested %d)\n", 
-                __func__, n_predict_tokens);
-    }
-    
-    return predicted_tokens;
-}// Check if MTP should be enabled based on model architecture
-bool common_sampler_can_use_mtp(struct llama_context * ctx) {
-    if (!ctx) {
-        return false;
-    }
-    
-    const struct llama_model * model = llama_get_model(ctx);
-    if (!model) {
-        return false;
-    }
-    
-    // Get model layer count to identify MTP-capable models
-    const int n_layer = llama_model_n_layer(model);
-    
-    // Check for known GLM4 models with NextN/MTP layers:
-    // - GLM-4.5-Air has 47 layers (46 transformer + 1 NextN)
-    // - GLM-4.5 has 93 layers (92 transformer + 1 NextN)
-    bool is_glm4_mtp = (n_layer == 47 || n_layer == 93);
-    
-    // Also check MTP support using API
-    int32_t n_mtp_layers = llama_model_n_mtp_layers(model);
-    if (n_mtp_layers > 0) {
-        is_glm4_mtp = true;
-    }
-    
-    if (is_glm4_mtp) {
-        // Use static variable to log only once per model
-        static bool mtp_logged = false;
-        if (!mtp_logged) {
-            LOG_INF("%s: MTP available for model with %d layers (%d MTP layers)\n", __func__, n_layer, n_mtp_layers);
-            mtp_logged = true;
-        }
-        return true;
-    }
-    
-    LOG_DBG("%s: MTP not available for model with %d layers\n", __func__, n_layer);
-    return false;
+    return accepted;
 }
