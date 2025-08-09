@@ -4589,7 +4589,7 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
 
                         // Load NextN/MTP tensors if they exist for this layer
                         if (hparams.nextn_predict_layers > 0 && static_cast<uint32_t>(i) >= n_layer - hparams.nextn_predict_layers) {
-                            // Load NextN tensors - these will be used in forward pass
+                            // Load NextN tensors - mark as optional until they're proven to exist
                             layer.nextn.eh_proj = create_tensor(tn(LLM_TENSOR_NEXTN_EH_PROJ, "weight", i), { 2 * n_embd, n_embd }, flags | TENSOR_NOT_REQUIRED);
                             layer.nextn.embed_tokens = create_tensor(tn(LLM_TENSOR_NEXTN_EMBED_TOKENS, "weight", i), { n_embd, n_vocab }, flags | TENSOR_NOT_REQUIRED);
                             layer.nextn.enorm = create_tensor(tn(LLM_TENSOR_NEXTN_ENORM, "weight", i), { n_embd }, flags | TENSOR_NOT_REQUIRED);
@@ -13773,35 +13773,59 @@ struct llm_build_glm4 : public llm_graph_context {
                 if (nextn.eh_proj && nextn.shared_head_head) {
                     // Process NextN layer for multi-token prediction
                     
-                    // 1. Embedding projection (hidden state -> prediction space)
-                    cur = ggml_mul_mat(ctx0, nextn.eh_proj, mtp_output);
-                    cb(cur, "nextn_eh_proj", il);
+                    // 1. Embedding projection (hidden state -> prediction space) 
+                    // For GLM4: eh_proj is {n_embd, n_embd}, standard matrix multiplication
+                    // Expected: mtp_output {batch, seq, n_embd} × eh_proj_T {n_embd, n_embd} = {batch, seq, n_embd}
+                    ggml_tensor * eh_proj_for_mul = nextn.eh_proj;
                     
-                    // 2. Input normalization  
-                    if (nextn.enorm) {
-                        cur = build_norm(cur, nextn.enorm, nullptr, LLM_NORM_RMS, il);
-                        cb(cur, "nextn_enorm", il);
+                    // For standard GLM4, check if transpose is needed (should be {n_embd, n_embd})
+                    if (nextn.eh_proj->ne[0] == n_embd && nextn.eh_proj->ne[1] == n_embd) {
+                        // Standard GLM4: transpose to get correct dimensions for mul_mat
+                        eh_proj_for_mul = ggml_transpose(ctx0, nextn.eh_proj);
+                        cb(eh_proj_for_mul, "nextn_eh_proj_transpose", il);
                     }
                     
-                    // 3. Hidden state normalization (if present)
-                    if (nextn.hnorm) {
-                        cur = build_norm(cur, nextn.hnorm, nullptr, LLM_NORM_RMS, il);
-                        cb(cur, "nextn_hnorm", il);
+                    // Safety check: verify tensor dimensions are compatible before multiplication
+                    if (eh_proj_for_mul && mtp_output && 
+                        eh_proj_for_mul->ne[0] == mtp_output->ne[0]) {
+                        cur = ggml_mul_mat(ctx0, eh_proj_for_mul, mtp_output);
+                        cb(cur, "nextn_eh_proj", il);
+                        
+                        // 2. Input normalization  
+                        if (nextn.enorm) {
+                            cur = build_norm(cur, nextn.enorm, nullptr, LLM_NORM_RMS, il);
+                            cb(cur, "nextn_enorm", il);
+                        }
+                        
+                        // 3. Hidden state normalization (if present)
+                        if (nextn.hnorm) {
+                            cur = build_norm(cur, nextn.hnorm, nullptr, LLM_NORM_RMS, il);
+                            cb(cur, "nextn_hnorm", il);
+                        }
+                        
+                        // 4. Multi-token prediction head (predict multiple tokens in parallel)
+                        if (nextn.shared_head_head && cur && 
+                            nextn.shared_head_head->ne[0] == cur->ne[0]) {
+                            cur = ggml_mul_mat(ctx0, nextn.shared_head_head, cur);
+                            cb(cur, "nextn_shared_head", il);
+                            
+                            // 5. Shared head normalization (final layer norm before output)
+                            if (nextn.shared_head_norm) {
+                                cur = build_norm(cur, nextn.shared_head_norm, nullptr, LLM_NORM_RMS, il);
+                                cb(cur, "nextn_head_norm", il);
+                            }
+                            
+                            // Update mtp_output for potential next NextN layer
+                            mtp_output = cur;
+                            cb(mtp_output, "nextn_out", il);
+                        } else {
+                            // Dimension mismatch, skip this operation
+                            cb(mtp_output, "nextn_skip_head", il);
+                        }
+                    } else {
+                        // Dimension mismatch, skip this layer completely
+                        cb(mtp_output, "nextn_skip_proj", il);
                     }
-                    
-                    // 4. Multi-token prediction head (predict multiple tokens in parallel)
-                    cur = ggml_mul_mat(ctx0, nextn.shared_head_head, cur);
-                    cb(cur, "nextn_shared_head", il);
-                    
-                    // 5. Shared head normalization (final layer norm before output)
-                    if (nextn.shared_head_norm) {
-                        cur = build_norm(cur, nextn.shared_head_norm, nullptr, LLM_NORM_RMS, il);
-                        cb(cur, "nextn_head_norm", il);
-                    }
-                    
-                    // Update mtp_output for potential next NextN layer
-                    mtp_output = cur;
-                    cb(mtp_output, "nextn_out", il);
                 } else {
                     // NextN tensors not available, skip this layer  
                     cb(mtp_output, "nextn_skip", il);
@@ -13983,34 +14007,58 @@ struct llm_build_glm4_moe : public llm_graph_context {
                     // Process NextN layer for multi-token prediction
                     
                     // 1. Embedding projection (hidden state -> prediction space)
-                    cur = ggml_mul_mat(ctx0, nextn.eh_proj, mtp_output);
-                    cb(cur, "nextn_eh_proj", il);
+                    // For GLM4_MOE: eh_proj is {2*n_embd, n_embd}, need to transpose for correct multiplication
+                    // Expected: mtp_output {batch, seq, n_embd} × eh_proj_T {n_embd, 2*n_embd} = {batch, seq, 2*n_embd}
+                    ggml_tensor * eh_proj_for_mul = nextn.eh_proj;
                     
-                    // 2. Input normalization  
-                    if (nextn.enorm) {
-                        cur = build_norm(cur, nextn.enorm, nullptr, LLM_NORM_RMS, il);
-                        cb(cur, "nextn_enorm", il);
+                    // Check dimensions and transpose if needed for GLM4_MOE
+                    if (nextn.eh_proj->ne[0] == 2 * n_embd && nextn.eh_proj->ne[1] == n_embd) {
+                        // GLM4_MOE case: transpose the weight matrix
+                        eh_proj_for_mul = ggml_transpose(ctx0, nextn.eh_proj);
+                        cb(eh_proj_for_mul, "nextn_eh_proj_transpose", il);
                     }
                     
-                    // 3. Hidden state normalization (if present)
-                    if (nextn.hnorm) {
-                        cur = build_norm(cur, nextn.hnorm, nullptr, LLM_NORM_RMS, il);
-                        cb(cur, "nextn_hnorm", il);
+                    // Safety check: verify tensor dimensions are compatible before multiplication
+                    if (eh_proj_for_mul && mtp_output && 
+                        eh_proj_for_mul->ne[0] == mtp_output->ne[0]) {
+                        cur = ggml_mul_mat(ctx0, eh_proj_for_mul, mtp_output);
+                        cb(cur, "nextn_eh_proj", il);
+                        
+                        // 2. Input normalization  
+                        if (nextn.enorm) {
+                            cur = build_norm(cur, nextn.enorm, nullptr, LLM_NORM_RMS, il);
+                            cb(cur, "nextn_enorm", il);
+                        }
+                        
+                        // 3. Hidden state normalization (if present)
+                        if (nextn.hnorm) {
+                            cur = build_norm(cur, nextn.hnorm, nullptr, LLM_NORM_RMS, il);
+                            cb(cur, "nextn_hnorm", il);
+                        }
+                        
+                        // 4. Multi-token prediction head (predict multiple tokens in parallel)
+                        if (nextn.shared_head_head && cur && 
+                            nextn.shared_head_head->ne[0] == cur->ne[0]) {
+                            cur = ggml_mul_mat(ctx0, nextn.shared_head_head, cur);
+                            cb(cur, "nextn_shared_head", il);
+                            
+                            // 5. Shared head normalization (final layer norm before output)
+                            if (nextn.shared_head_norm) {
+                                cur = build_norm(cur, nextn.shared_head_norm, nullptr, LLM_NORM_RMS, il);
+                                cb(cur, "nextn_head_norm", il);
+                            }
+                            
+                            // Update mtp_output for potential next NextN layer
+                            mtp_output = cur;
+                            cb(mtp_output, "nextn_out", il);
+                        } else {
+                            // Dimension mismatch, skip this operation
+                            cb(mtp_output, "nextn_skip_head", il);
+                        }
+                    } else {
+                        // Dimension mismatch, skip this layer completely
+                        cb(mtp_output, "nextn_skip_proj", il);
                     }
-                    
-                    // 4. Multi-token prediction head (predict multiple tokens in parallel)
-                    cur = ggml_mul_mat(ctx0, nextn.shared_head_head, cur);
-                    cb(cur, "nextn_shared_head", il);
-                    
-                    // 5. Shared head normalization (final layer norm before output)
-                    if (nextn.shared_head_norm) {
-                        cur = build_norm(cur, nextn.shared_head_norm, nullptr, LLM_NORM_RMS, il);
-                        cb(cur, "nextn_head_norm", il);
-                    }
-                    
-                    // Update mtp_output for potential next NextN layer
-                    mtp_output = cur;
-                    cb(mtp_output, "nextn_out", il);
                 } else {
                     // NextN tensors not available, skip this layer  
                     cb(mtp_output, "nextn_skip", il);
