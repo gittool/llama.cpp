@@ -3069,6 +3069,23 @@ int32_t llama_predict_mtp_tokens(
     return n_predicted;
 }
 
+// ---- Speculative MTP experimental stubs ----
+
+const float * llama_get_mtp_hidden_ith(struct llama_context * ctx, int32_t idx, int32_t i_pred) {
+    (void) ctx; (void) idx; (void) i_pred;
+    return nullptr; // hidden export not implemented yet
+}
+
+int32_t llama_accept_predicted_tokens(struct llama_context * ctx, int32_t idx, int32_t n_tokens, const llama_token * tokens) {
+    (void) ctx; (void) idx; (void) n_tokens; (void) tokens;
+    return 0; // fast-accept path not implemented yet
+}
+
+bool llama_context_can_speculative_mtp(const struct llama_context * ctx) {
+    (void) ctx;
+    return false; // until hidden/KV exposure is added
+}
+
 // NOTE (Speculative integration placeholder):
 // 真の forward 削減を行う speculative verification には「予測した複数トークン分の中間 hidden/KV」を同時生成または
 // draft モデルで生成 -> target 1 forward で検証 という構造が必要。

@@ -3537,23 +3537,38 @@ struct server_context {
                 }
                 
                 llama_token id;
+                int accepted = 0;
                 if (used_mtp && !predicted_tokens.empty()) {
-                    // Use first token from MTP prediction
+                    // Accept all predicted tokens (greedy) except we only counted first originally
+                    for (size_t k = 0; k < predicted_tokens.size(); ++k) {
+                        llama_token t = predicted_tokens[k];
+                        common_sampler_accept(slot.smpl, t, true);
+                        slot.generated_tokens.push_back(t);
+                        accepted++;
+                        if (t == llama_vocab_eos(llama_model_get_vocab(llama_get_model(ctx)))) break;
+                    }
                     id = predicted_tokens[0];
                 } else {
-                    // Fallback to standard sampling
                     id = common_sampler_sample(slot.smpl, ctx, tok_idx);
+                    common_sampler_accept(slot.smpl, id, true);
+                    slot.generated_tokens.push_back(id);
+                    accepted = 1;
+                }
+
+                // speculative fast-accept placeholder (currently inactive)
+                if (used_mtp && llama_context_can_speculative_mtp(ctx)) {
+                    // In future: attempt to accept remaining predicted tokens without extra decode
+                    // int fast = llama_accept_predicted_tokens(ctx, slot.n_past - 1, accepted-1, predicted_tokens.data()+1);
+                    // SLT_DBG(slot, "speculative fast-accept=%d\n", fast);
                 }
 
                 slot.i_batch = -1;
 
-                common_sampler_accept(slot.smpl, id, true);
-
-                slot.n_decoded += 1;
+                slot.n_decoded += accepted;
 
                 const int64_t t_current = ggml_time_us();
 
-                if (slot.n_decoded == 1) {
+                if (slot.n_decoded == accepted) { // first generation block
                     slot.t_start_generation = t_current;
                     slot.t_prompt_processing = (slot.t_start_generation - slot.t_start_process_prompt) / 1e3;
                     metrics.on_prompt_eval(slot);

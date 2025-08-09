@@ -1379,6 +1379,21 @@ extern "C" {
                            float   confidence_threshold,
                      llama_token * tokens);
 
+        // --- Experimental Speculative MTP (NextN hidden/KV) API (stubs) ---
+        // These APIs are forward-looking. Current NextN implementation does not expose hidden/KV.
+        // They return 0 / false until the core model provides the necessary intermediate states.
+
+        // Obtain pointer to i-th predicted hidden (shape: n_embd) for last decode step.
+        // Returns nullptr if unavailable.
+        LLAMA_API const float * llama_get_mtp_hidden_ith(struct llama_context * ctx, int32_t idx, int32_t i_pred);
+
+        // Accept a contiguous block of already predicted tokens (positions immediately after idx)
+        // by writing their cached KV without re-decoding. Returns number of tokens accepted.
+        LLAMA_API int32_t llama_accept_predicted_tokens(struct llama_context * ctx, int32_t idx, int32_t n_tokens, const llama_token * tokens);
+
+        // Check if speculative MTP fast-accept path is currently supported (false in stub stage).
+        LLAMA_API bool llama_context_can_speculative_mtp(const struct llama_context * ctx);
+
     //
     // Model info API
     //
