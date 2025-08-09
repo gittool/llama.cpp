@@ -13780,8 +13780,8 @@ struct llm_build_glm4 : public llm_graph_context {
                     
                     // For standard GLM4, check if transpose is needed (should be {n_embd, n_embd})
                     if (nextn.eh_proj->ne[0] == n_embd && nextn.eh_proj->ne[1] == n_embd) {
-                        // Standard GLM4: transpose to get correct dimensions for mul_mat
-                        eh_proj_for_mul = ggml_transpose(ctx0, nextn.eh_proj);
+                        // Standard GLM4: transpose to get correct dimensions for mul_mat and make it contiguous
+                        eh_proj_for_mul = ggml_cont(ctx0, ggml_transpose(ctx0, nextn.eh_proj));
                         cb(eh_proj_for_mul, "nextn_eh_proj_transpose", il);
                     }
                     
@@ -14013,8 +14013,8 @@ struct llm_build_glm4_moe : public llm_graph_context {
                     
                     // Check dimensions and transpose if needed for GLM4_MOE
                     if (nextn.eh_proj->ne[0] == 2 * n_embd && nextn.eh_proj->ne[1] == n_embd) {
-                        // GLM4_MOE case: transpose the weight matrix
-                        eh_proj_for_mul = ggml_transpose(ctx0, nextn.eh_proj);
+                        // GLM4_MOE case: transpose the weight matrix and make it contiguous
+                        eh_proj_for_mul = ggml_cont(ctx0, ggml_transpose(ctx0, nextn.eh_proj));
                         cb(eh_proj_for_mul, "nextn_eh_proj_transpose", il);
                     }
                     
