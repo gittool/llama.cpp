@@ -673,3 +673,51 @@ std::vector<enum common_sampler_type> common_sampler_types_from_chars(const std:
     }
     return out;
 }
+
+// ---------------------------------------------------------------------------
+// Additional helper implementations required by main.cpp (link errors)
+// ---------------------------------------------------------------------------
+
+llama_token common_sampler_last(const struct common_sampler * gsmpl) {
+    if (!gsmpl || gsmpl->prev.empty()) return LLAMA_TOKEN_NULL;
+    // ring_buffer stores latest at pos-1 (wrap handled)
+    size_t sz = gsmpl->prev.size();
+    size_t idx = (gsmpl->prev.first + sz - 1) % gsmpl->prev.capacity; // rely on layout
+    return gsmpl->prev.data[idx];
+}
+
+std::string common_sampler_print(const struct common_sampler * gsmpl) {
+    if (!gsmpl) return {};
+    std::string out;
+    out.reserve(64);
+    out += '[';
+    bool first = true;
+    for (auto t : gsmpl->params.samplers) {
+        if (!first) out += ' ';
+        out += common_sampler_type_to_chr(t);
+        first = false;
+    }
+    out += ']';
+    if (gsmpl->params.mtp_enabled) {
+        char buf[64];
+        snprintf(buf, sizeof(buf), " MTP(n=%d,avg=%.2f)", gsmpl->params.n_predict_tokens, (float)gsmpl->mtp_metrics.ema_accept_len);
+        out += buf;
+    }
+    return out;
+}
+
+std::string common_sampler_prev_str(common_sampler * gsmpl, llama_context * ctx, int n) {
+    if (!gsmpl || n <= 0 || gsmpl->prev.empty()) return {};
+    const llama_model * model = llama_get_model(ctx);
+    const llama_vocab * vocab = llama_model_get_vocab(model);
+    std::string out;
+    n = std::min<int>(n, (int)gsmpl->prev.size());
+    out.reserve(n * 6);
+    // iterate last n tokens
+    for (int i = (int)gsmpl->prev.size() - n; i < (int)gsmpl->prev.size(); ++i) {
+        size_t idx = (gsmpl->prev.first + i) % gsmpl->prev.capacity;
+        llama_token tok = gsmpl->prev.data[idx];
+        out += llama_vocab_get_text(vocab, tok);
+    }
+    return out;
+}
