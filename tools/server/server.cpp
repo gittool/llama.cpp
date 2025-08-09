@@ -3517,50 +3517,71 @@ struct server_context {
 
                 const int tok_idx = slot.i_batch - i;
 
-                // Try MTP (Multi-Token Prediction) if available
-                std::vector<llama_token> predicted_tokens;
-                bool used_mtp = false;
-                
-                // Check if MTP is available and enabled
-                if (common_sampler_can_use_mtp(ctx)) {
-                    // Use MTP to predict multiple tokens at once
-                    predicted_tokens = common_sampler_sample_mtp(
-                        slot.smpl, ctx, tok_idx, 
-                        4,    // predict up to 4 tokens
-                        0.7f  // acceptance threshold
-                    );
-                    
-                    if (predicted_tokens.size() > 1) {
-                        used_mtp = true;
-                        SRV_DBG("MTP predicted %zu tokens for slot %d\n", predicted_tokens.size(), slot.id);
+                // --- Multi-Token Prediction (MTP) attempt ------------------------------------
+                // 現状: モデルは追加トークンの hidden/KV を生成していないため fast-accept は未実装。
+                //       従って先頭トークンのみを実際の生成系列に commit し、追加予測は統計用途に留める。
+                // 将来: llama_context_can_speculative_mtp(ctx) が true になったら llama_accept_predicted_tokens() を呼び
+                //       追加トークンを KV に書き込み n_past をスキップし高速化する予定。
+
+                llama_token id = LLAMA_TOKEN_NULL;
+                int accepted = 0;              // 実際に系列へ確定したトークン数
+                int predicted_extra = 0;        // 追加で「参考として」得られたトークン数 (commit しない)
+
+                bool mtp_used = false;
+                std::vector<llama_token> mtp_tokens; // [first, extra1, extra2, ...]
+
+                // サンプラ/モデル両方でMTP利用可能か判定 (samplerを渡す包括的判定)
+                if (common_sampler_can_use_mtp(slot.smpl, ctx)) {
+                    // 動的 n_predict_tokens (必要に応じて適応) : 0 の場合は params に設定された既定値を利用
+                    int want = slot.params.sampling.n_predict_tokens > 0
+                                ? slot.params.sampling.n_predict_tokens
+                                : slot.params.sampling.mtp_enabled ? slot.params.sampling.n_predict_tokens : 0; // fallback (多くは0)
+                    if (want <= 0) {
+                        // sampler 側で適応制御を行っている場合は sampler->params.n_predict_tokens を使う (API上は外部非公開想定のため再度要求値として safe 上限 8 で呼ぶ)
+                        want =  slot.params.sampling.mtp_enabled ?  slot.params.sampling.mtp_max_predict : 0;
+                    }
+                    want = std::min(want, slot.params.sampling.mtp_max_predict);
+
+                    if (want > 0) {
+                        float thr = slot.params.sampling.mtp_use_margin
+                                    ? slot.params.sampling.mtp_margin_thresh  // margin モード: sampling.cpp 側で負符号変換
+                                    : slot.params.sampling.mtp_accept_rate;    // 確率しきい値
+
+                        mtp_tokens = common_sampler_sample_mtp(
+                                slot.smpl, ctx, tok_idx,
+                                want,
+                                thr);
+                        if (!mtp_tokens.empty()) {
+                            mtp_used = true;
+                        }
                     }
                 }
-                
-                llama_token id;
-                int accepted = 0;
-                if (used_mtp && !predicted_tokens.empty()) {
-                    // Accept all predicted tokens (greedy) except we only counted first originally
-                    for (size_t k = 0; k < predicted_tokens.size(); ++k) {
-                        llama_token t = predicted_tokens[k];
-                        common_sampler_accept(slot.smpl, t, true);
-                        slot.generated_tokens.push_back(t);
-                        accepted++;
-                        if (t == llama_vocab_eos(llama_model_get_vocab(llama_get_model(ctx)))) break;
+
+                if (mtp_used && !mtp_tokens.empty()) {
+                    // 先頭のみ commit
+                    id = mtp_tokens[0];
+                    common_sampler_accept(slot.smpl, id, true);
+                    slot.generated_tokens.push_back(id);
+                    accepted = 1;
+                    predicted_extra = (int) mtp_tokens.size() - 1; // 参考値
+
+                    if (predicted_extra > 0) {
+                        SRV_DBG("MTP predicted %d extra (not committed yet) for slot %d\n", predicted_extra, slot.id);
                     }
-                    id = predicted_tokens[0];
                 } else {
+                    // 通常 1 トークンサンプリング
                     id = common_sampler_sample(slot.smpl, ctx, tok_idx);
                     common_sampler_accept(slot.smpl, id, true);
                     slot.generated_tokens.push_back(id);
                     accepted = 1;
                 }
 
-                // speculative fast-accept placeholder (currently inactive)
-                if (used_mtp && llama_context_can_speculative_mtp(ctx)) {
-                    // In future: attempt to accept remaining predicted tokens without extra decode
-                    // int fast = llama_accept_predicted_tokens(ctx, slot.n_past - 1, accepted-1, predicted_tokens.data()+1);
-                    // SLT_DBG(slot, "speculative fast-accept=%d\n", fast);
+                // 将来 fast-accept 実装箇所:
+                if (mtp_used && predicted_extra > 0 && llama_context_can_speculative_mtp(ctx)) {
+                    // int fast = llama_accept_predicted_tokens(ctx, slot.n_past - 1, predicted_extra, mtp_tokens.data() + 1);
+                    // if (fast > 0) { /* slot.n_past += fast; accepted += fast; slot.generated_tokens.insert(...); */ }
                 }
+                // --------------------------------------------------------------------------------
 
                 slot.i_batch = -1;
 

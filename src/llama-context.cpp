@@ -3071,14 +3071,30 @@ int32_t llama_predict_mtp_tokens(
 
 // ---- Speculative MTP experimental stubs ----
 
+// Experimental: return hidden state used for current logits as MTP hidden[0]
+// For scenario A (shared_head_head shape = [n_embd, n_vocab]) we do not yet have true future hidden states.
+// This returns only the last token hidden (i_pred==0). Future indices => nullptr.
 const float * llama_get_mtp_hidden_ith(struct llama_context * ctx, int32_t idx, int32_t i_pred) {
-    (void) ctx; (void) idx; (void) i_pred;
-    return nullptr; // hidden export not implemented yet
+    (void) idx; // currently unused (single position)
+    if (!ctx) return nullptr;
+    if (i_pred != 0) return nullptr; // no future hidden states yet
+    // embeddings buffer holds per-output hidden after final norm (before lm head)
+    float * embd = ctx->get_embeddings();
+    if (!embd) return nullptr;
+    // Map last logical output id to embedding row 0..n_outputs-1.
+    // Simplest: return embedding of the last output (current token)
+    uint32_t n_out = ctx->n_outputs; // friend access; n_outputs is public in struct
+    if (n_out == 0) return nullptr;
+    const llama_model & model = ctx->get_model();
+    const int n_embd = model.hparams.n_embd;
+    return embd + (size_t)(n_out - 1) * n_embd;
 }
 
 int32_t llama_accept_predicted_tokens(struct llama_context * ctx, int32_t idx, int32_t n_tokens, const llama_token * tokens) {
+    // Placeholder: fast KV insertion for speculative MTP not yet implemented.
+    // Returning 0 indicates no additional tokens were committed beyond the already decoded one.
     (void) ctx; (void) idx; (void) n_tokens; (void) tokens;
-    return 0; // fast-accept path not implemented yet
+    return 0;
 }
 
 bool llama_context_can_speculative_mtp(const struct llama_context * ctx) {
