@@ -13785,10 +13785,11 @@ struct llm_build_glm4 : public llm_graph_context {
             // Temporarily disable optimized MTP processor to avoid tensor dimension issues
             if (false && !mtp_layer_indices.empty()) {
                 // Process all MTP layers in optimized manner
-                auto callback = [this](ggml_tensor * tensor, const char * name, int layer) {
-                    this->cb(tensor, name, layer);
-                };
-                mtp_output = mtp_processor.process_mtp_layers(ctx0, mtp_output, mtp_layer_indices, callback);
+                // MTP processor call disabled for stability
+                // auto callback = [this](ggml_tensor * tensor, const char * name, int layer) {
+                //     this->cb(tensor, name, layer);
+                // };
+                // mtp_output = mtp_processor.process_mtp_layers(ctx0, mtp_output, mtp_layer_indices, callback);
             } else {
                 // Use individual layer processing (optimized path temporarily disabled)
                 for (int il = n_transformer_layers; il < n_layer; ++il) {
@@ -13826,7 +13827,7 @@ struct llm_build_glm4 : public llm_graph_context {
                         eh_proj_for_mul->ne[1] > 0 && mtp_output->ne[1] > 0) {
                         
                         // Additional dimension validation
-                        const size_t expected_rows = eh_proj_for_mul->ne[1];
+                        const int64_t expected_rows = (int64_t)eh_proj_for_mul->ne[1];
                         
                         if (expected_rows == n_embd || expected_rows == 2 * n_embd) {
                             cur = ggml_mul_mat(ctx0, eh_proj_for_mul, mtp_output);
@@ -14063,10 +14064,11 @@ struct llm_build_glm4_moe : public llm_graph_context {
             // Temporarily disable optimized MTP processor to avoid tensor dimension issues
             if (false && !mtp_layer_indices.empty()) {
                 // Process all MTP layers in optimized manner
-                auto callback = [this](ggml_tensor * tensor, const char * name, int layer) {
-                    this->cb(tensor, name, layer);
-                };
-                mtp_output = mtp_processor.process_mtp_layers(ctx0, mtp_output, mtp_layer_indices, callback);
+                // MTP processor call disabled for stability
+                // auto callback = [this](ggml_tensor * tensor, const char * name, int layer) {
+                //     this->cb(tensor, name, layer);
+                // };
+                // mtp_output = mtp_processor.process_mtp_layers(ctx0, mtp_output, mtp_layer_indices, callback);
             } else {
                 // Use individual layer processing (optimized path temporarily disabled)
                 for (int il = n_transformer_layers; il < n_layer; ++il) {
@@ -14104,7 +14106,7 @@ struct llm_build_glm4_moe : public llm_graph_context {
                         eh_proj_for_mul->ne[1] > 0 && mtp_output->ne[1] > 0) {
                         
                         // Additional dimension validation
-                        const size_t expected_rows = eh_proj_for_mul->ne[1];
+                        const int64_t expected_rows = (int64_t)eh_proj_for_mul->ne[1];
                         
                         if (expected_rows == n_embd || expected_rows == 2 * n_embd) {
                             cur = ggml_mul_mat(ctx0, eh_proj_for_mul, mtp_output);
