@@ -159,15 +159,15 @@ struct common_params_sampling {
     bool    timing_per_token   = false;
 
     // Multi-Token Prediction (MTP) parameters
-    int32_t n_predict_tokens   = 0;     // number of tokens to predict ahead for MTP (0 = disabled)
-    float   mtp_accept_rate    = 0.7f;  // acceptance rate threshold for MTP predictions (0.0-1.0)
-    bool    mtp_enabled        = false; // whether MTP is enabled
+    int32_t n_predict_tokens   = 4;     // number of tokens to predict ahead for MTP (0 = disabled) - SPEEDUP: increased from 0 to 4
+    float   mtp_accept_rate    = 0.6f;  // acceptance rate threshold for MTP predictions (0.0-1.0) - SPEEDUP: lowered from 0.7f for more acceptance
+    bool    mtp_enabled        = true;  // whether MTP is enabled - SPEEDUP: enabled by default
     // advanced MTP tuning parameters
-    bool    mtp_use_margin     = false; // use logit margin (max - second) instead of probability threshold
-    float   mtp_margin_thresh  = 2.5f;  // margin threshold (in logit space) when mtp_use_margin = true
-    float   mtp_target_avg_len = 2.0f;  // target average accepted tokens per forward (for adaptive n_predict_tokens)
-    float   mtp_adapt_rate     = 0.05f; // EMA / adaptation step size
-    int32_t mtp_max_predict    = 8;     // upper bound for adaptive n_predict_tokens
+    bool    mtp_use_margin     = true;  // use logit margin (max - second) instead of probability threshold - SPEEDUP: enabled for better thresholding
+    float   mtp_margin_thresh  = 2.0f;  // margin threshold (in logit space) when mtp_use_margin = true - SPEEDUP: lowered from 2.5f for more acceptance
+    float   mtp_target_avg_len = 3.0f;  // target average accepted tokens per forward (for adaptive n_predict_tokens) - SPEEDUP: increased from 2.0f
+    float   mtp_adapt_rate     = 0.1f;  // EMA / adaptation step size - SPEEDUP: increased from 0.05f for faster adaptation
+    int32_t mtp_max_predict    = 12;    // upper bound for adaptive n_predict_tokens - SPEEDUP: increased from 8 to 12
 
     std::vector<std::string> dry_sequence_breakers = {"\n", ":", "\"", "*"};     // default sequence breakers for DRY
 

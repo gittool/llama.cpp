@@ -2261,8 +2261,8 @@ llama_context_params llama_context_default_params() {
         /*.yarn_beta_slow              =*/ 1.0f,
         /*.yarn_orig_ctx               =*/ 0,
         /*.defrag_thold                =*/ -1.0f,
-        /*.n_predict_tokens            =*/ 0,     // MTP disabled by default
-        /*.mtp_accept_rate             =*/ 0.7f,  // Default acceptance threshold
+        /*.n_predict_tokens            =*/ 4,     // MTP enabled by default - SPEEDUP: increased from 0 to 4
+        /*.mtp_accept_rate             =*/ 0.6f,  // Default acceptance threshold - SPEEDUP: lowered from 0.7f for more acceptance
         /*.cb_eval                     =*/ nullptr,
         /*.cb_eval_user_data           =*/ nullptr,
         /*.type_k                      =*/ GGML_TYPE_F16,

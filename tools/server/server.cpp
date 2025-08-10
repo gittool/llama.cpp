@@ -3535,10 +3535,10 @@ struct server_context {
                     // 動的 n_predict_tokens (必要に応じて適応) : 0 の場合は params に設定された既定値を利用
                     int want = slot.params.sampling.n_predict_tokens > 0
                                 ? slot.params.sampling.n_predict_tokens
-                                : slot.params.sampling.mtp_enabled ? slot.params.sampling.n_predict_tokens : 0; // fallback (多くは0)
+                                : slot.params.sampling.mtp_enabled ? slot.params.sampling.mtp_max_predict : 0; // fallback: use max_predict when enabled
                     if (want <= 0) {
-                        // sampler 側で適応制御を行っている場合は sampler->params.n_predict_tokens を使う (API上は外部非公開想定のため再度要求値として safe 上限 8 で呼ぶ)
-                        want =  slot.params.sampling.mtp_enabled ?  slot.params.sampling.mtp_max_predict : 0;
+                        // sampler 側で適応制御を行っている場合は sampler->params.n_predict_tokens を使う
+                        want = slot.params.sampling.mtp_enabled ? slot.params.sampling.mtp_max_predict : 0;
                     }
                     want = std::min(want, slot.params.sampling.mtp_max_predict);
 
