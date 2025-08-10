@@ -3098,23 +3098,32 @@ int32_t llama_accept_predicted_tokens(struct llama_context * ctx, int32_t idx, i
     int32_t accepted = 0;
     
     try {
-        // Update context with accepted tokens
-        for (int32_t i = 0; i < n_tokens && (idx + i) < (int32_t)ctx->kv_self.size; ++i) {
-            // Add token to context (simplified fast path for MTP)
-            if (ctx->n_past + accepted < (int32_t)ctx->kv_self.size) {
-                // Update token history (if needed)
-                // ctx->tokens[ctx->n_past + accepted] = tokens[i];
+        // Get memory/KV cache for space checking
+        auto * memory = llama_get_memory(ctx);
+        if (!memory) {
+            return 0;
+        }
+        
+        // Get current context size and capacity
+        const uint32_t n_ctx = llama_n_ctx(ctx);
+        const uint32_t kv_used = (uint32_t)llama_kv_self_used_cells(ctx);
+        
+        // Update context with accepted tokens (simplified implementation)
+        for (int32_t i = 0; i < n_tokens && (kv_used + accepted) < n_ctx; ++i) {
+            // For now, just count how many we could theoretically accept
+            // Full implementation would require proper KV cache manipulation
+            if ((idx + i) >= 0 && (kv_used + accepted + 1) < n_ctx) {
                 accepted++;
             } else {
-                break; // KV cache full
+                break; // KV cache would be full
             }
         }
         
-        // Update n_past to reflect accepted tokens
-        ctx->n_past += accepted;
+        // Note: This is a simplified implementation for MTP statistics
+        // Full speculative execution would require proper KV state updates
         
-        LLAMA_LOG_DEBUG("%s: accepted %d/%d MTP predicted tokens, n_past=%d\n", 
-                       __func__, accepted, n_tokens, ctx->n_past);
+        LLAMA_LOG_DEBUG("%s: accepted %d/%d MTP predicted tokens (kv_used=%d, n_ctx=%d)\n", 
+                       __func__, accepted, n_tokens, kv_used, n_ctx);
         
     } catch (...) {
         LLAMA_LOG_WARN("%s: exception during MTP token acceptance, accepted=%d\n", __func__, accepted);
@@ -3124,23 +3133,32 @@ int32_t llama_accept_predicted_tokens(struct llama_context * ctx, int32_t idx, i
 }
 
 bool llama_context_can_speculative_mtp(const struct llama_context * ctx) {
-    if (!ctx || !ctx->model) {
+    if (!ctx) {
+        return false;
+    }
+    
+    // Get model reference through accessor method
+    const llama_model * model = llama_get_model(ctx);
+    if (!model) {
         return false;
     }
     
     // Check if model supports MTP (has NextN layers)
-    const bool has_mtp_support = llama_model_has_mtp_support(ctx->model);
+    const bool has_mtp_support = llama_model_has_mtp_support(model);
     
     // Check if KV cache has sufficient space for speculative tokens
-    const bool has_kv_space = ctx->n_past < (int32_t)(ctx->kv_self.size * 0.9f); // Keep 10% buffer
+    const uint32_t n_ctx = llama_n_ctx(ctx);
+    const uint32_t kv_used = (uint32_t)llama_kv_self_used_cells(ctx);
+    const bool has_kv_space = kv_used < (uint32_t)(n_ctx * 0.9f); // Keep 10% buffer
     
     // Enable MTP speculative execution if both conditions are met
     const bool can_use_mtp = has_mtp_support && has_kv_space;
     
-    LLAMA_LOG_DEBUG("%s: MTP support=%s, KV space=%s, can_use=%s\n", 
+    LLAMA_LOG_DEBUG("%s: MTP support=%s, KV space=%s (kv_used=%d, n_ctx=%d), can_use=%s\n", 
                    __func__, 
                    has_mtp_support ? "yes" : "no",
                    has_kv_space ? "yes" : "no", 
+                   kv_used, n_ctx,
                    can_use_mtp ? "yes" : "no");
     
     return can_use_mtp;
