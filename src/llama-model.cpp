@@ -13769,11 +13769,19 @@ struct llm_build_glm4 : public llm_graph_context {
                 if (nextn.eh_proj && nextn.shared_head_head) {
                     // 1. Embedding projection for NextN
                     ggml_tensor * eh_proj_for_mul = nextn.eh_proj;
+                    
+                    // GLM4: eh_proj is {n_embd, n_embd}, transpose to {n_embd, n_embd}
                     if (nextn.eh_proj->ne[0] == n_embd && nextn.eh_proj->ne[1] == n_embd) {
                         eh_proj_for_mul = ggml_cont(ctx0, ggml_transpose(ctx0, nextn.eh_proj));
                         cb(eh_proj_for_mul, "nextn_eh_proj_transpose", il);
                     }
+                    // GLM4_MOE: eh_proj is {2*n_embd, n_embd}, transpose to {n_embd, 2*n_embd}
+                    else if (nextn.eh_proj->ne[0] == 2 * n_embd && nextn.eh_proj->ne[1] == n_embd) {
+                        eh_proj_for_mul = ggml_cont(ctx0, ggml_transpose(ctx0, nextn.eh_proj));
+                        cb(eh_proj_for_mul, "nextn_eh_proj_transpose", il);
+                    }
                     
+                    // Check dimension compatibility: input {batch, seq, n_embd} x weight {n_embd, output_dim}
                     if (eh_proj_for_mul && cur && eh_proj_for_mul->ne[0] == cur->ne[0]) {
                         cur = ggml_mul_mat(ctx0, eh_proj_for_mul, cur);
                         cb(cur, "nextn_eh_proj", il);
@@ -13788,14 +13796,21 @@ struct llm_build_glm4 : public llm_graph_context {
                             cb(cur, "nextn_hnorm", il);
                         }
                         
-                        // 3. Multi-token prediction head
-                        if (nextn.shared_head_head->ne[0] == cur->ne[0]) {
-                            cur = ggml_mul_mat(ctx0, nextn.shared_head_head, cur);
-                            cb(cur, "nextn_shared_head", il);
+                        // 3. Multi-token prediction head (GLM4 version)
+                        if (nextn.shared_head_head && cur) {
+                            const int cur_out_dim = cur->ne[0];
+                            const int head_in_dim = nextn.shared_head_head->ne[0];
                             
-                            if (nextn.shared_head_norm) {
-                                cur = build_norm(cur, nextn.shared_head_norm, nullptr, LLM_NORM_RMS, il);
-                                cb(cur, "nextn_head_norm", il);
+                            if (head_in_dim == cur_out_dim) {
+                                cur = ggml_mul_mat(ctx0, nextn.shared_head_head, cur);
+                                cb(cur, "nextn_shared_head", il);
+                                
+                                if (nextn.shared_head_norm) {
+                                    cur = build_norm(cur, nextn.shared_head_norm, nullptr, LLM_NORM_RMS, il);
+                                    cb(cur, "nextn_head_norm", il);
+                                }
+                            } else {
+                                cb(cur, "nextn_shared_head_skip", il);
                             }
                         }
                     }
@@ -13974,11 +13989,19 @@ struct llm_build_glm4_moe : public llm_graph_context {
                 if (nextn.eh_proj && nextn.shared_head_head) {
                     // 1. Embedding projection for NextN (MOE variant)
                     ggml_tensor * eh_proj_for_mul = nextn.eh_proj;
+                    
+                    // GLM4_MOE: eh_proj is {2*n_embd, n_embd}, transpose to {n_embd, 2*n_embd}
                     if (nextn.eh_proj->ne[0] == 2 * n_embd && nextn.eh_proj->ne[1] == n_embd) {
                         eh_proj_for_mul = ggml_cont(ctx0, ggml_transpose(ctx0, nextn.eh_proj));
                         cb(eh_proj_for_mul, "nextn_eh_proj_transpose", il);
                     }
+                    // GLM4: eh_proj is {n_embd, n_embd}, transpose to {n_embd, n_embd}  
+                    else if (nextn.eh_proj->ne[0] == n_embd && nextn.eh_proj->ne[1] == n_embd) {
+                        eh_proj_for_mul = ggml_cont(ctx0, ggml_transpose(ctx0, nextn.eh_proj));
+                        cb(eh_proj_for_mul, "nextn_eh_proj_transpose", il);
+                    }
                     
+                    // Check dimension compatibility: input {batch, seq, n_embd} x weight {n_embd, output_dim}
                     if (eh_proj_for_mul && cur && eh_proj_for_mul->ne[0] == cur->ne[0]) {
                         cur = ggml_mul_mat(ctx0, eh_proj_for_mul, cur);
                         cb(cur, "nextn_eh_proj", il);
@@ -13993,14 +14016,21 @@ struct llm_build_glm4_moe : public llm_graph_context {
                             cb(cur, "nextn_hnorm", il);
                         }
                         
-                        // 3. Multi-token prediction head
-                        if (nextn.shared_head_head->ne[0] == cur->ne[0]) {
-                            cur = ggml_mul_mat(ctx0, nextn.shared_head_head, cur);
-                            cb(cur, "nextn_shared_head", il);
+                        // 3. Multi-token prediction head (GLM4_MOE version)
+                        if (nextn.shared_head_head && cur) {
+                            const int cur_out_dim = cur->ne[0];
+                            const int head_in_dim = nextn.shared_head_head->ne[0];
                             
-                            if (nextn.shared_head_norm) {
-                                cur = build_norm(cur, nextn.shared_head_norm, nullptr, LLM_NORM_RMS, il);
-                                cb(cur, "nextn_head_norm", il);
+                            if (head_in_dim == cur_out_dim) {
+                                cur = ggml_mul_mat(ctx0, nextn.shared_head_head, cur);
+                                cb(cur, "nextn_shared_head", il);
+                                
+                                if (nextn.shared_head_norm) {
+                                    cur = build_norm(cur, nextn.shared_head_norm, nullptr, LLM_NORM_RMS, il);
+                                    cb(cur, "nextn_head_norm", il);
+                                }
+                            } else {
+                                cb(cur, "nextn_shared_head_skip", il);
                             }
                         }
                     }

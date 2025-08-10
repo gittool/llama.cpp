@@ -543,6 +543,20 @@ ggml_tensor * llm_graph_context::build_cvec(
 ggml_tensor * llm_graph_context::build_lora_mm(
           ggml_tensor * w,
           ggml_tensor * cur) const {
+    // Add dimension compatibility check before matrix multiplication
+    if (!ggml_can_mul_mat(w, cur)) {
+        fprintf(stderr, "Matrix multiplication compatibility check failed in build_lora_mm:\n");
+        fprintf(stderr, "w dims: [%lld, %lld, %lld, %lld]\n", w->ne[0], w->ne[1], w->ne[2], w->ne[3]);
+        fprintf(stderr, "cur dims: [%lld, %lld, %lld, %lld]\n", cur->ne[0], cur->ne[1], cur->ne[2], cur->ne[3]);
+        fprintf(stderr, "Compatibility requirements:\n");
+        fprintf(stderr, "  - w->ne[0] == cur->ne[0]: %s (%lld == %lld)\n", 
+                w->ne[0] == cur->ne[0] ? "✓" : "✗", w->ne[0], cur->ne[0]);
+        fprintf(stderr, "  - cur->ne[2] %% w->ne[2] == 0: %s (%lld %% %lld == %lld)\n",
+                cur->ne[2] % w->ne[2] == 0 ? "✓" : "✗", cur->ne[2], w->ne[2], cur->ne[2] % w->ne[2]);
+        fprintf(stderr, "  - cur->ne[3] %% w->ne[3] == 0: %s (%lld %% %lld == %lld)\n",
+                cur->ne[3] % w->ne[3] == 0 ? "✓" : "✗", cur->ne[3], w->ne[3], cur->ne[3] % w->ne[3]);
+        GGML_ABORT("Matrix dimensions incompatible for multiplication in build_lora_mm");
+    }
     ggml_tensor * res = ggml_mul_mat(ctx0, w, cur);
 
     for (const auto & lora : *loras) {
