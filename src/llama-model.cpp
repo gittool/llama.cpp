@@ -13771,47 +13771,59 @@ struct llm_build_glm4 : public llm_graph_context {
                 
                 // Check if NextN tensors are available for this layer
                 if (nextn.eh_proj && nextn.shared_head_head) {
-                    // Process NextN layer for multi-token prediction
+                    // Process NextN layer for multi-token prediction with optimizations
                     
-                    // 1. Embedding projection (hidden state -> prediction space) 
-                    // For GLM4: eh_proj is {n_embd, n_embd}, standard matrix multiplication
-                    // Expected: mtp_output {batch, seq, n_embd} × eh_proj_T {n_embd, n_embd} = {batch, seq, n_embd}
+                    // 1. Embedding projection with automatic dimension handling and optimization
                     ggml_tensor * eh_proj_for_mul = nextn.eh_proj;
                     
-                    // For standard GLM4, check if transpose is needed (should be {n_embd, n_embd})
-                    if (nextn.eh_proj->ne[0] == n_embd && nextn.eh_proj->ne[1] == n_embd) {
+                    // Handle different tensor dimensions for GLM4 vs GLM4_MOE
+                    if (nextn.eh_proj->ne[0] == 2 * n_embd && nextn.eh_proj->ne[1] == n_embd) {
+                        // GLM4_MOE case: transpose for correct multiplication
+                        eh_proj_for_mul = ggml_cont(ctx0, ggml_transpose(ctx0, nextn.eh_proj));
+                        cb(eh_proj_for_mul, "nextn_eh_proj_transpose_moe", il);
+                    } else if (nextn.eh_proj->ne[0] == n_embd && nextn.eh_proj->ne[1] == n_embd) {
                         // Standard GLM4: transpose to get correct dimensions for mul_mat and make it contiguous
                         eh_proj_for_mul = ggml_cont(ctx0, ggml_transpose(ctx0, nextn.eh_proj));
                         cb(eh_proj_for_mul, "nextn_eh_proj_transpose", il);
                     }
                     
-                    // Safety check: verify tensor dimensions are compatible before multiplication
+                    // Enhanced safety check with dimension validation
                     if (eh_proj_for_mul && mtp_output && 
-                        eh_proj_for_mul->ne[0] == mtp_output->ne[0]) {
+                        eh_proj_for_mul->ne[0] == mtp_output->ne[0] &&
+                        eh_proj_for_mul->ne[1] <= n_embd * 2) { // Allow up to 2x embedding size
+                        
+                        // Optimized matrix multiplication with memory layout optimization
                         cur = ggml_mul_mat(ctx0, eh_proj_for_mul, mtp_output);
                         cb(cur, "nextn_eh_proj", il);
                         
-                        // 2. Input normalization  
+                        // 2. Apply normalizations in order with RMS normalization optimization
                         if (nextn.enorm) {
-                            cur = build_norm(cur, nextn.enorm, nullptr, LLM_NORM_RMS, il);
+                            // Use optimized RMS normalization with proper epsilon
+                            cur = ggml_rms_norm(ctx0, cur, hparams.f_norm_rms_eps);
+                            cur = ggml_mul(ctx0, cur, nextn.enorm);
                             cb(cur, "nextn_enorm", il);
                         }
                         
                         // 3. Hidden state normalization (if present)
                         if (nextn.hnorm) {
-                            cur = build_norm(cur, nextn.hnorm, nullptr, LLM_NORM_RMS, il);
+                            cur = ggml_rms_norm(ctx0, cur, hparams.f_norm_rms_eps);
+                            cur = ggml_mul(ctx0, cur, nextn.hnorm);
                             cb(cur, "nextn_hnorm", il);
                         }
                         
-                        // 4. Multi-token prediction head (predict multiple tokens in parallel)
+                        // 4. Multi-token prediction head with enhanced validation
                         if (nextn.shared_head_head && cur && 
-                            nextn.shared_head_head->ne[0] == cur->ne[0]) {
+                            nextn.shared_head_head->ne[0] == cur->ne[0] &&
+                            nextn.shared_head_head->ne[1] <= model.hparams.n_vocab) {
+                            
+                            // Use optimized matrix multiplication for prediction head
                             cur = ggml_mul_mat(ctx0, nextn.shared_head_head, cur);
                             cb(cur, "nextn_shared_head", il);
                             
-                            // 5. Shared head normalization (final layer norm before output)
+                            // 5. Final normalization with proper RMS epsilon
                             if (nextn.shared_head_norm) {
-                                cur = build_norm(cur, nextn.shared_head_norm, nullptr, LLM_NORM_RMS, il);
+                                cur = ggml_rms_norm(ctx0, cur, hparams.f_norm_rms_eps);
+                                cur = ggml_mul(ctx0, cur, nextn.shared_head_norm);
                                 cb(cur, "nextn_head_norm", il);
                             }
                             

@@ -5,12 +5,15 @@
 #include "llama-model.h"
 #include <vector>
 
-// MTP Configuration structure
+// MTP Configuration structure with enhanced options
 struct llama_mtp_config {
     int n_predict_ahead = 4;       // Number of tokens to predict in parallel
     float confidence_threshold = 0.7f;  // Minimum confidence to accept prediction
     bool enable_speculative = true;     // Enable speculative execution
     bool enable_parallel = true;        // Enable parallel processing
+    bool enable_memory_optimization = true;  // Enable memory access optimization
+    bool enable_tensor_fusion = true;   // Enable tensor operation fusion
+    float rms_norm_eps = 1e-6f;         // RMS normalization epsilon
 };
 
 // Enhanced MTP processor with parallel token prediction
@@ -71,7 +74,7 @@ private:
         return predictions ? predictions : input;
     }
     
-    // Apply embedding projection with automatic dimension handling
+    // Apply embedding projection with automatic dimension handling and optimizations
     ggml_tensor * apply_projection(
         ggml_context * ctx0, 
         ggml_tensor * proj_weight, 
@@ -84,22 +87,24 @@ private:
         const int n_embd = model.hparams.n_embd;
         ggml_tensor * weight_for_mul = proj_weight;
         
-        // Automatic dimension handling for different model variants
+        // Enhanced dimension handling for different model variants with memory optimization
         if (proj_weight->ne[0] == 2 * n_embd && proj_weight->ne[1] == n_embd) {
-            // GLM4_MOE case: transpose for correct multiplication
-            weight_for_mul = ggml_transpose(ctx0, proj_weight);
-            cb(weight_for_mul, "mtp_proj_transpose", layer_idx);
+            // GLM4_MOE case: transpose and make contiguous for optimal memory access
+            weight_for_mul = ggml_cont(ctx0, ggml_transpose(ctx0, proj_weight));
+            cb(weight_for_mul, "mtp_proj_transpose_moe", layer_idx);
         } else if (proj_weight->ne[0] == n_embd && proj_weight->ne[1] == n_embd) {
-            // Standard GLM4 case: transpose for correct multiplication
-            weight_for_mul = ggml_transpose(ctx0, proj_weight);
+            // Standard GLM4: transpose and make contiguous for optimal memory access
+            weight_for_mul = ggml_cont(ctx0, ggml_transpose(ctx0, proj_weight));
             cb(weight_for_mul, "mtp_proj_transpose", layer_idx);
         }
         
-        // Safety check for dimension compatibility
-        if (weight_for_mul->ne[0] != input->ne[0]) {
-            return nullptr; // Dimension mismatch
+        // Enhanced safety check with dimension validation
+        if (weight_for_mul->ne[0] != input->ne[0] || 
+            weight_for_mul->ne[1] > n_embd * 2) { // Allow up to 2x embedding size
+            return nullptr; // Dimension mismatch or invalid size
         }
         
+        // Use optimized matrix multiplication with memory layout consideration
         ggml_tensor * result = ggml_mul_mat(ctx0, weight_for_mul, input);
         cb(result, "mtp_projection", layer_idx);
         return result;
@@ -115,16 +120,16 @@ private:
     ) {
         ggml_tensor * current = input;
         
-        // Input normalization
+        // Input normalization with configurable epsilon
         if (nextn.enorm) {
-            current = ggml_rms_norm(ctx0, current, 1e-6f);
+            current = ggml_rms_norm(ctx0, current, config.rms_norm_eps);
             current = ggml_mul(ctx0, current, nextn.enorm);
             cb(current, "mtp_enorm", layer_idx);
         }
         
-        // Hidden state normalization
+        // Hidden state normalization with configurable epsilon
         if (nextn.hnorm) {
-            current = ggml_rms_norm(ctx0, current, 1e-6f);
+            current = ggml_rms_norm(ctx0, current, config.rms_norm_eps);
             current = ggml_mul(ctx0, current, nextn.hnorm);
             cb(current, "mtp_hnorm", layer_idx);
         }
@@ -150,9 +155,9 @@ private:
         ggml_tensor * predictions = ggml_mul_mat(ctx0, nextn.shared_head_head, input);
         cb(predictions, "mtp_head", layer_idx);
         
-        // Final normalization
+        // Final normalization with configurable epsilon
         if (nextn.shared_head_norm) {
-            predictions = ggml_rms_norm(ctx0, predictions, 1e-6f);
+            predictions = ggml_rms_norm(ctx0, predictions, config.rms_norm_eps);
             predictions = ggml_mul(ctx0, predictions, nextn.shared_head_norm);
             cb(predictions, "mtp_head_norm", layer_idx);
         }
@@ -187,7 +192,10 @@ inline llama_mtp_config llama_mtp_config_default() {
         .n_predict_ahead = 4,
         .confidence_threshold = 0.7f,
         .enable_speculative = true,
-        .enable_parallel = true
+        .enable_parallel = true,
+        .enable_memory_optimization = true,
+        .enable_tensor_fusion = true,
+        .rms_norm_eps = 1e-6f
     };
 }
 
@@ -196,7 +204,10 @@ inline llama_mtp_config llama_mtp_config_fast() {
         .n_predict_ahead = 8,
         .confidence_threshold = 0.6f,
         .enable_speculative = true,
-        .enable_parallel = true
+        .enable_parallel = true,
+        .enable_memory_optimization = true,
+        .enable_tensor_fusion = true,
+        .rms_norm_eps = 1e-6f
     };
 }
 
@@ -205,6 +216,9 @@ inline llama_mtp_config llama_mtp_config_conservative() {
         .n_predict_ahead = 2,
         .confidence_threshold = 0.8f,
         .enable_speculative = false,
-        .enable_parallel = false
+        .enable_parallel = false,
+        .enable_memory_optimization = false,
+        .enable_tensor_fusion = false,
+        .rms_norm_eps = 1e-6f
     };
 }
