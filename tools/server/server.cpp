@@ -3644,11 +3644,8 @@ struct server_context {
                         SRV_DBG("MTP: Speculatively accepted %d/%d extra tokens for slot %d\n", 
                                fast, predicted_extra, slot.id);
                         
-                        // Update MTP metrics
-                        if (mm) {
-                            mm->extra_accepted += fast;
-                            mm->speculative_hits++;
-                        }
+                        // Log MTP speculative execution success
+                        SRV_DBG("MTP: Successfully executed speculative forward - saved %d decode steps\n", fast);
                     } else {
                         SRV_DBG("MTP: No speculative acceptance for slot %d (space/validation failed)\n", slot.id);
                     }

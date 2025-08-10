@@ -3106,7 +3106,11 @@ int32_t llama_accept_predicted_tokens(struct llama_context * ctx, int32_t idx, i
         
         // Get current context size and capacity
         const uint32_t n_ctx = llama_n_ctx(ctx);
-        const uint32_t kv_used = (uint32_t)llama_kv_self_used_cells(ctx);
+        
+        // Calculate KV cache usage using the new memory API
+        const llama_pos pos_min = llama_memory_seq_pos_min(memory, -1);
+        const llama_pos pos_max = llama_memory_seq_pos_max(memory, -1);
+        const uint32_t kv_used = (pos_max >= pos_min) ? (uint32_t)(pos_max - pos_min + 1) : 0;
         
         // Update context with accepted tokens (simplified implementation)
         for (int32_t i = 0; i < n_tokens && (kv_used + accepted) < n_ctx; ++i) {
@@ -3148,7 +3152,13 @@ bool llama_context_can_speculative_mtp(const struct llama_context * ctx) {
     
     // Check if KV cache has sufficient space for speculative tokens
     const uint32_t n_ctx = llama_n_ctx(ctx);
-    const uint32_t kv_used = (uint32_t)llama_kv_self_used_cells(ctx);
+    
+    // Get memory for calculating KV cache usage
+    auto * memory = llama_get_memory(ctx);
+    const llama_pos pos_min = llama_memory_seq_pos_min(memory, -1);
+    const llama_pos pos_max = llama_memory_seq_pos_max(memory, -1);
+    const uint32_t kv_used = (pos_max >= pos_min) ? (uint32_t)(pos_max - pos_min + 1) : 0;
+    
     const bool has_kv_space = kv_used < (uint32_t)(n_ctx * 0.9f); // Keep 10% buffer
     
     // Enable MTP speculative execution if both conditions are met
