@@ -13872,6 +13872,14 @@ struct llm_build_glm4_moe : public llm_graph_context {
             cur = build_norm(inpL, model.layers[il].attn_norm, NULL, LLM_NORM_RMS, il);
             cb(cur, "attn_norm", il);
 
+            // GLM4 MoE dimension fix: If cur has double the expected dimension, split it
+            // This handles the case where MoE has concatenated embeddings (8192) but layers expect (4096)
+            if (cur->ne[0] == 2 * hparams.n_embd && model.layers[il].wq->ne[0] == hparams.n_embd) {
+                // Take the first half of the concatenated embedding
+                cur = ggml_view_2d(ctx0, cur, hparams.n_embd, cur->ne[1], cur->nb[1], 0);
+                cb(cur, "cur_split", il);
+            }
+
             // self-attention
             {
                 ggml_tensor * Qcur = build_lora_mm(model.layers[il].wq, cur);
