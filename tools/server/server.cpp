@@ -3629,10 +3629,29 @@ struct server_context {
                     }
                 }
 
-                // 将来 fast-accept 実装箇所:
+                // MTP Speculative execution implementation:
                 if (mtp_used && predicted_extra > 0 && llama_context_can_speculative_mtp(ctx)) {
-                    // int fast = llama_accept_predicted_tokens(ctx, slot.n_past - 1, predicted_extra, mtp_tokens.data() + 1);
-                    // if (fast > 0) { /* slot.n_past += fast; accepted += fast; slot.generated_tokens.insert(...); */ }
+                    int fast = llama_accept_predicted_tokens(ctx, slot.n_past - 1, predicted_extra, mtp_tokens.data() + 1);
+                    if (fast > 0) { 
+                        // Update slot state with accepted tokens
+                        slot.n_past += fast; 
+                        
+                        // Add accepted tokens to generated sequence
+                        for (int i = 1; i <= fast; ++i) {
+                            slot.generated_tokens.push_back(mtp_tokens[i]);
+                        }
+                        
+                        SRV_DBG("MTP: Speculatively accepted %d/%d extra tokens for slot %d\n", 
+                               fast, predicted_extra, slot.id);
+                        
+                        // Update MTP metrics
+                        if (mm) {
+                            mm->extra_accepted += fast;
+                            mm->speculative_hits++;
+                        }
+                    } else {
+                        SRV_DBG("MTP: No speculative acceptance for slot %d (space/validation failed)\n", slot.id);
+                    }
                 }
                 // --------------------------------------------------------------------------------
 

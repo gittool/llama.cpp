@@ -1,4 +1,5 @@
 #include "llama-model.h"
+#include "llama-mtp-optimized.h"
 
 #include "llama-impl.h"
 #include "llama-mmap.h"
@@ -13762,12 +13763,31 @@ struct llm_build_glm4 : public llm_graph_context {
             cb(inpL, "l_out", il);
         }
 
-        // Phase 2: NextN/MTP layers for multi-token prediction
+        // Phase 2: NextN/MTP layers for multi-token prediction with optimized parallel processing
         ggml_tensor * mtp_output = inpL; // Default to transformer output
         if (hparams.nextn_predict_layers > 0) {
-            // Process MTP/NextN layers for parallel token prediction
+            // Use optimized MTP processor for parallel token prediction
+            llama_mtp_config mtp_config = llama_mtp_config_default();
+            mtp_config.n_predict_ahead = 4; // Predict 4 tokens ahead
+            mtp_config.enable_parallel = true;
+            
+            llama_mtp_processor mtp_processor(model, mtp_config);
+            
+            // Collect layer indices for batch processing
+            std::vector<int> mtp_layer_indices;
             for (int il = n_transformer_layers; il < n_layer; ++il) {
-                const auto & nextn = model.layers[il].nextn;
+                if (model.layers[il].nextn.eh_proj && model.layers[il].nextn.shared_head_head) {
+                    mtp_layer_indices.push_back(il);
+                }
+            }
+            
+            if (!mtp_layer_indices.empty()) {
+                // Process all MTP layers in optimized manner
+                mtp_output = mtp_processor.process_mtp_layers(ctx0, mtp_output, mtp_layer_indices, cb);
+            } else {
+                // Fallback to individual layer processing if optimized path fails
+                for (int il = n_transformer_layers; il < n_layer; ++il) {
+                    const auto & nextn = model.layers[il].nextn;
                 
                 // Check if NextN tensors are available for this layer
                 if (nextn.eh_proj && nextn.shared_head_head) {
@@ -13778,11 +13798,21 @@ struct llm_build_glm4 : public llm_graph_context {
                     // Expected: mtp_output {batch, seq, n_embd} × eh_proj_T {n_embd, n_embd} = {batch, seq, n_embd}
                     ggml_tensor * eh_proj_for_mul = nextn.eh_proj;
                     
-                    // For standard GLM4, check if transpose is needed (should be {n_embd, n_embd})
+                    // Use cached transpose if available, otherwise compute and cache it
                     if (nextn.eh_proj->ne[0] == n_embd && nextn.eh_proj->ne[1] == n_embd) {
-                        // Standard GLM4: transpose to get correct dimensions for mul_mat and make it contiguous
-                        eh_proj_for_mul = ggml_cont(ctx0, ggml_transpose(ctx0, nextn.eh_proj));
-                        cb(eh_proj_for_mul, "nextn_eh_proj_transpose", il);
+                        if (nextn.transpose_cached && nextn.eh_proj_transposed) {
+                            // Use pre-cached transpose for optimal performance
+                            eh_proj_for_mul = nextn.eh_proj_transposed;
+                            cb(eh_proj_for_mul, "nextn_eh_proj_cached", il);
+                        } else {
+                            // Compute transpose and cache it for future use
+                            eh_proj_for_mul = ggml_cont(ctx0, ggml_transpose(ctx0, nextn.eh_proj));
+                            cb(eh_proj_for_mul, "nextn_eh_proj_transpose", il);
+                            
+                            // Cache the transposed tensor (non-const cast needed for caching)
+                            const_cast<llama_layer_nextn&>(nextn).eh_proj_transposed = eh_proj_for_mul;
+                            const_cast<llama_layer_nextn&>(nextn).transpose_cached = true;
+                        }
                     }
                     
                     // Safety check: verify tensor dimensions are compatible before multiplication
@@ -13831,6 +13861,7 @@ struct llm_build_glm4 : public llm_graph_context {
                     cb(mtp_output, "nextn_skip", il);
                 }
             }
+            } // End fallback processing
         }
 
         // Final norm
@@ -13995,15 +14026,34 @@ struct llm_build_glm4_moe : public llm_graph_context {
             inpL = cur;
         }
 
-        // Phase 2: NextN/MTP layers for multi-token prediction
+        // Phase 2: NextN/MTP layers for multi-token prediction with optimized parallel processing
         ggml_tensor * mtp_output = inpL; // Default to transformer output
         if (hparams.nextn_predict_layers > 0) {
-            // Process MTP/NextN layers for parallel token prediction
+            // Use optimized MTP processor for parallel token prediction
+            llama_mtp_config mtp_config = llama_mtp_config_default();
+            mtp_config.n_predict_ahead = 4; // Predict 4 tokens ahead
+            mtp_config.enable_parallel = true;
+            
+            llama_mtp_processor mtp_processor(model, mtp_config);
+            
+            // Collect layer indices for batch processing
+            std::vector<int> mtp_layer_indices;
             for (int il = n_transformer_layers; il < n_layer; ++il) {
-                const auto & nextn = model.layers[il].nextn;
-                
-                // Check if NextN tensors are available for this layer
-                if (nextn.eh_proj && nextn.shared_head_head) {
+                if (model.layers[il].nextn.eh_proj && model.layers[il].nextn.shared_head_head) {
+                    mtp_layer_indices.push_back(il);
+                }
+            }
+            
+            if (!mtp_layer_indices.empty()) {
+                // Process all MTP layers in optimized manner
+                mtp_output = mtp_processor.process_mtp_layers(ctx0, mtp_output, mtp_layer_indices, cb);
+            } else {
+                // Fallback to individual layer processing if optimized path fails
+                for (int il = n_transformer_layers; il < n_layer; ++il) {
+                    const auto & nextn = model.layers[il].nextn;
+                    
+                    // Check if NextN tensors are available for this layer
+                    if (nextn.eh_proj && nextn.shared_head_head) {
                     // Process NextN layer for multi-token prediction
                     
                     // 1. Embedding projection (hidden state -> prediction space)
@@ -14011,11 +14061,21 @@ struct llm_build_glm4_moe : public llm_graph_context {
                     // Expected: mtp_output {batch, seq, n_embd} × eh_proj_T {n_embd, 2*n_embd} = {batch, seq, 2*n_embd}
                     ggml_tensor * eh_proj_for_mul = nextn.eh_proj;
                     
-                    // Check dimensions and transpose if needed for GLM4_MOE
+                    // Use cached transpose if available, otherwise compute and cache it (GLM4_MOE)
                     if (nextn.eh_proj->ne[0] == 2 * n_embd && nextn.eh_proj->ne[1] == n_embd) {
-                        // GLM4_MOE case: transpose the weight matrix and make it contiguous
-                        eh_proj_for_mul = ggml_cont(ctx0, ggml_transpose(ctx0, nextn.eh_proj));
-                        cb(eh_proj_for_mul, "nextn_eh_proj_transpose", il);
+                        if (nextn.transpose_cached && nextn.eh_proj_transposed) {
+                            // Use pre-cached transpose for optimal performance
+                            eh_proj_for_mul = nextn.eh_proj_transposed;
+                            cb(eh_proj_for_mul, "nextn_eh_proj_cached", il);
+                        } else {
+                            // GLM4_MOE case: transpose the weight matrix and make it contiguous
+                            eh_proj_for_mul = ggml_cont(ctx0, ggml_transpose(ctx0, nextn.eh_proj));
+                            cb(eh_proj_for_mul, "nextn_eh_proj_transpose", il);
+                            
+                            // Cache the transposed tensor for future use
+                            const_cast<llama_layer_nextn&>(nextn).eh_proj_transposed = eh_proj_for_mul;
+                            const_cast<llama_layer_nextn&>(nextn).transpose_cached = true;
+                        }
                     }
                     
                     // Safety check: verify tensor dimensions are compatible before multiplication
@@ -14064,6 +14124,7 @@ struct llm_build_glm4_moe : public llm_graph_context {
                     cb(mtp_output, "nextn_skip", il);
                 }
             }
+            } // End fallback processing
         }
 
         cur = mtp_output;

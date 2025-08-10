@@ -175,6 +175,10 @@ struct llama_layer_nextn {
     struct ggml_tensor * hnorm            = nullptr;
     struct ggml_tensor * shared_head_head = nullptr;
     struct ggml_tensor * shared_head_norm = nullptr;
+    
+    // Optimized cached tensors to avoid repeated transpose operations
+    struct ggml_tensor * eh_proj_transposed = nullptr;  // Pre-computed transpose for performance
+    bool transpose_cached = false;                       // Flag to check if transpose is cached
 };
 
 // Multi-Token Prediction (MTP) processing state
