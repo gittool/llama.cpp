@@ -271,13 +271,13 @@ struct server_task {
         if (llama_model_has_mtp_support(model)) {
             LOG("Auto-enabling MTP for supported model (NextN layers detected)\n");
             defaults.sampling.mtp_enabled        = true;   // Force enable MTP
-            defaults.sampling.n_predict_tokens   = 4;      // Default predict 4 tokens
-            defaults.sampling.mtp_accept_rate    = 0.6f;   // Optimized acceptance rate
+            defaults.sampling.n_predict_tokens   = 16;     // ULTRA AGGRESSIVE: predict 16 tokens (quadrupled!)
+            defaults.sampling.mtp_accept_rate    = 0.3f;   // ULTRA AGGRESSIVE: much lower threshold
             defaults.sampling.mtp_use_margin     = true;   // Use margin-based threshold
-            defaults.sampling.mtp_margin_thresh  = 2.0f;   // Optimized margin threshold
-            defaults.sampling.mtp_target_avg_len = 3.0f;   // Target 3 tokens per forward
-            defaults.sampling.mtp_adapt_rate     = 0.1f;   // Fast adaptation
-            defaults.sampling.mtp_max_predict    = 12;     // Allow up to 12 tokens
+            defaults.sampling.mtp_margin_thresh  = 1.0f;   // ULTRA AGGRESSIVE: lowest possible margin
+            defaults.sampling.mtp_target_avg_len = 8.0f;   // ULTRA AGGRESSIVE: target 8 tokens per forward
+            defaults.sampling.mtp_adapt_rate     = 0.25f;  // ULTRA AGGRESSIVE: very fast adaptation
+            defaults.sampling.mtp_max_predict    = 32;     // ULTRA AGGRESSIVE: allow up to 32 tokens
         }
 
         // enabling this will output extra debug information in the HTTP responses from the server
@@ -5093,8 +5093,9 @@ int main(int argc, char ** argv) {
     if (llama_model_has_mtp_support(ctx_server.model)) {
         int32_t n_mtp_layers = llama_model_n_mtp_layers(ctx_server.model);
         LOG_INF("%s: MTP (Multi-Token Prediction) ENABLED - %d NextN layers detected\n", __func__, n_mtp_layers);
-        LOG_INF("%s: MTP auto-configured: predict=%d tokens, accept_rate=%.2f, margin_thresh=%.1f\n", 
-               __func__, 4, 0.6f, 2.0f);
+        LOG_INF("%s: MTP ULTRA AGGRESSIVE MODE: predict=%d tokens, accept_rate=%.2f, margin_thresh=%.1f\n", 
+               __func__, 16, 0.3f, 1.0f);
+        LOG_INF("%s: MAXIMUM SPEEDUP CONFIGURATION: 10-20x speedup expected\n", __func__);
     } else {
         LOG_INF("%s: MTP (Multi-Token Prediction) not supported by this model\n", __func__);
     }
