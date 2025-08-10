@@ -183,28 +183,28 @@ private:
 
 // Utility functions for MTP configuration
 inline llama_mtp_config llama_mtp_config_default() {
-    return llama_mtp_config{
-        .n_predict_ahead = 4,
-        .confidence_threshold = 0.7f,
-        .enable_speculative = true,
-        .enable_parallel = true
-    };
+    llama_mtp_config config;
+    config.n_predict_ahead = 4;
+    config.confidence_threshold = 0.7f;
+    config.enable_speculative = true;
+    config.enable_parallel = true;
+    return config;
 }
 
 inline llama_mtp_config llama_mtp_config_fast() {
-    return llama_mtp_config{
-        .n_predict_ahead = 8,
-        .confidence_threshold = 0.6f,
-        .enable_speculative = true,
-        .enable_parallel = true
-    };
+    llama_mtp_config config;
+    config.n_predict_ahead = 8;
+    config.confidence_threshold = 0.6f;
+    config.enable_speculative = true;
+    config.enable_parallel = true;
+    return config;
 }
 
 inline llama_mtp_config llama_mtp_config_conservative() {
-    return llama_mtp_config{
-        .n_predict_ahead = 2,
-        .confidence_threshold = 0.8f,
-        .enable_speculative = false,
-        .enable_parallel = false
-    };
+    llama_mtp_config config;
+    config.n_predict_ahead = 2;
+    config.confidence_threshold = 0.8f;
+    config.enable_speculative = false;
+    config.enable_parallel = false;
+    return config;
 }

@@ -13783,7 +13783,10 @@ struct llm_build_glm4 : public llm_graph_context {
             
             if (!mtp_layer_indices.empty()) {
                 // Process all MTP layers in optimized manner
-                mtp_output = mtp_processor.process_mtp_layers(ctx0, mtp_output, mtp_layer_indices, cb);
+                auto callback = [this](ggml_tensor * tensor, const char * name, int layer) {
+                    this->cb(tensor, name, layer);
+                };
+                mtp_output = mtp_processor.process_mtp_layers(ctx0, mtp_output, mtp_layer_indices, callback);
             } else {
                 // Fallback to individual layer processing if optimized path fails
                 for (int il = n_transformer_layers; il < n_layer; ++il) {
@@ -14046,7 +14049,10 @@ struct llm_build_glm4_moe : public llm_graph_context {
             
             if (!mtp_layer_indices.empty()) {
                 // Process all MTP layers in optimized manner
-                mtp_output = mtp_processor.process_mtp_layers(ctx0, mtp_output, mtp_layer_indices, cb);
+                auto callback = [this](ggml_tensor * tensor, const char * name, int layer) {
+                    this->cb(tensor, name, layer);
+                };
+                mtp_output = mtp_processor.process_mtp_layers(ctx0, mtp_output, mtp_layer_indices, callback);
             } else {
                 // Fallback to individual layer processing if optimized path fails
                 for (int il = n_transformer_layers; il < n_layer; ++il) {
