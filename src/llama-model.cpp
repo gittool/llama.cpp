@@ -1,5 +1,6 @@
 #include "llama-model.h"
-#include "llama-mtp-optimized.h"
+// Temporarily disable MTP optimized header to avoid runtime issues
+// #include "llama-mtp-optimized.h"
 
 #include "llama-impl.h"
 #include "llama-mmap.h"
@@ -13766,12 +13767,12 @@ struct llm_build_glm4 : public llm_graph_context {
         // Phase 2: NextN/MTP layers for multi-token prediction with optimized parallel processing
         ggml_tensor * mtp_output = inpL; // Default to transformer output
         if (hparams.nextn_predict_layers > 0) {
-            // Use optimized MTP processor for parallel token prediction
-            llama_mtp_config mtp_config = llama_mtp_config_default();
-            mtp_config.n_predict_ahead = 4; // Predict 4 tokens ahead
-            mtp_config.enable_parallel = true;
-            
-            llama_mtp_processor mtp_processor(model, mtp_config);
+            // MTP optimized processor temporarily disabled for stability
+            // llama_mtp_config mtp_config = llama_mtp_config_default();
+            // mtp_config.n_predict_ahead = 4; // Predict 4 tokens ahead
+            // mtp_config.enable_parallel = true;
+            // 
+            // llama_mtp_processor mtp_processor(model, mtp_config);
             
             // Collect layer indices for batch processing
             std::vector<int> mtp_layer_indices;
@@ -13781,14 +13782,15 @@ struct llm_build_glm4 : public llm_graph_context {
                 }
             }
             
-            if (!mtp_layer_indices.empty()) {
+            // Temporarily disable optimized MTP processor to avoid tensor dimension issues
+            if (false && !mtp_layer_indices.empty()) {
                 // Process all MTP layers in optimized manner
                 auto callback = [this](ggml_tensor * tensor, const char * name, int layer) {
                     this->cb(tensor, name, layer);
                 };
                 mtp_output = mtp_processor.process_mtp_layers(ctx0, mtp_output, mtp_layer_indices, callback);
             } else {
-                // Fallback to individual layer processing if optimized path fails
+                // Use individual layer processing (optimized path temporarily disabled)
                 for (int il = n_transformer_layers; il < n_layer; ++il) {
                     const auto & nextn = model.layers[il].nextn;
                 
@@ -13818,10 +13820,21 @@ struct llm_build_glm4 : public llm_graph_context {
                         }
                     }
                     
-                    // Safety check: verify tensor dimensions are compatible before multiplication
+                    // Enhanced safety check: verify tensor dimensions are compatible before multiplication
                     if (eh_proj_for_mul && mtp_output && 
-                        eh_proj_for_mul->ne[0] == mtp_output->ne[0]) {
-                        cur = ggml_mul_mat(ctx0, eh_proj_for_mul, mtp_output);
+                        eh_proj_for_mul->ne[0] == mtp_output->ne[0] &&
+                        eh_proj_for_mul->ne[1] > 0 && mtp_output->ne[1] > 0) {
+                        
+                        // Additional dimension validation
+                        const size_t expected_rows = eh_proj_for_mul->ne[1];
+                        
+                        if (expected_rows == n_embd || expected_rows == 2 * n_embd) {
+                            cur = ggml_mul_mat(ctx0, eh_proj_for_mul, mtp_output);
+                        } else {
+                            // Skip multiplication if dimensions are unexpected
+                            cb(mtp_output, "nextn_skip_invalid_dims", il);
+                            cur = mtp_output; // Pass through unchanged
+                        }
                         cb(cur, "nextn_eh_proj", il);
                         
                         // 2. Input normalization  
@@ -14032,12 +14045,12 @@ struct llm_build_glm4_moe : public llm_graph_context {
         // Phase 2: NextN/MTP layers for multi-token prediction with optimized parallel processing
         ggml_tensor * mtp_output = inpL; // Default to transformer output
         if (hparams.nextn_predict_layers > 0) {
-            // Use optimized MTP processor for parallel token prediction
-            llama_mtp_config mtp_config = llama_mtp_config_default();
-            mtp_config.n_predict_ahead = 4; // Predict 4 tokens ahead
-            mtp_config.enable_parallel = true;
-            
-            llama_mtp_processor mtp_processor(model, mtp_config);
+            // MTP optimized processor temporarily disabled for stability
+            // llama_mtp_config mtp_config = llama_mtp_config_default();
+            // mtp_config.n_predict_ahead = 4; // Predict 4 tokens ahead
+            // mtp_config.enable_parallel = true;
+            // 
+            // llama_mtp_processor mtp_processor(model, mtp_config);
             
             // Collect layer indices for batch processing
             std::vector<int> mtp_layer_indices;
@@ -14047,14 +14060,15 @@ struct llm_build_glm4_moe : public llm_graph_context {
                 }
             }
             
-            if (!mtp_layer_indices.empty()) {
+            // Temporarily disable optimized MTP processor to avoid tensor dimension issues
+            if (false && !mtp_layer_indices.empty()) {
                 // Process all MTP layers in optimized manner
                 auto callback = [this](ggml_tensor * tensor, const char * name, int layer) {
                     this->cb(tensor, name, layer);
                 };
                 mtp_output = mtp_processor.process_mtp_layers(ctx0, mtp_output, mtp_layer_indices, callback);
             } else {
-                // Fallback to individual layer processing if optimized path fails
+                // Use individual layer processing (optimized path temporarily disabled)
                 for (int il = n_transformer_layers; il < n_layer; ++il) {
                     const auto & nextn = model.layers[il].nextn;
                     
@@ -14084,10 +14098,21 @@ struct llm_build_glm4_moe : public llm_graph_context {
                         }
                     }
                     
-                    // Safety check: verify tensor dimensions are compatible before multiplication
+                    // Enhanced safety check: verify tensor dimensions are compatible before multiplication
                     if (eh_proj_for_mul && mtp_output && 
-                        eh_proj_for_mul->ne[0] == mtp_output->ne[0]) {
-                        cur = ggml_mul_mat(ctx0, eh_proj_for_mul, mtp_output);
+                        eh_proj_for_mul->ne[0] == mtp_output->ne[0] &&
+                        eh_proj_for_mul->ne[1] > 0 && mtp_output->ne[1] > 0) {
+                        
+                        // Additional dimension validation
+                        const size_t expected_rows = eh_proj_for_mul->ne[1];
+                        
+                        if (expected_rows == n_embd || expected_rows == 2 * n_embd) {
+                            cur = ggml_mul_mat(ctx0, eh_proj_for_mul, mtp_output);
+                        } else {
+                            // Skip multiplication if dimensions are unexpected
+                            cb(mtp_output, "nextn_skip_invalid_dims", il);
+                            cur = mtp_output; // Pass through unchanged
+                        }
                         cb(cur, "nextn_eh_proj", il);
                         
                         // 2. Input normalization  
