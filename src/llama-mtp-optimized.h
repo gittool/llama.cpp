@@ -156,7 +156,8 @@ private:
         if (!nextn.shared_head_head || !input) return nullptr;
         
         // Safety check for dimension compatibility
-        if (nextn.shared_head_head->ne[0] != input->ne[0]) {
+        if (nextn.shared_head_head->ne[0] != input->ne[0] ||
+            nextn.shared_head_head->ne[1] > model.vocab.n_tokens()) {
             return nullptr;
         }
         
@@ -196,37 +197,37 @@ private:
 
 // Utility functions for MTP configuration
 inline llama_mtp_config llama_mtp_config_default() {
-    return llama_mtp_config{
-        .n_predict_ahead = 4,
-        .confidence_threshold = 0.7f,
-        .enable_speculative = true,
-        .enable_parallel = true,
-        .enable_memory_optimization = true,
-        .enable_tensor_fusion = true,
-        .rms_norm_eps = 1e-6f
-    };
+    llama_mtp_config config;
+    config.n_predict_ahead = 4;
+    config.confidence_threshold = 0.7f;
+    config.enable_speculative = true;
+    config.enable_parallel = true;
+    config.enable_memory_optimization = true;
+    config.enable_tensor_fusion = true;
+    config.rms_norm_eps = 1e-6f;
+    return config;
 }
 
 inline llama_mtp_config llama_mtp_config_fast() {
-    return llama_mtp_config{
-        .n_predict_ahead = 8,
-        .confidence_threshold = 0.6f,
-        .enable_speculative = true,
-        .enable_parallel = true,
-        .enable_memory_optimization = true,
-        .enable_tensor_fusion = true,
-        .rms_norm_eps = 1e-6f
-    };
+    llama_mtp_config config;
+    config.n_predict_ahead = 8;
+    config.confidence_threshold = 0.6f;
+    config.enable_speculative = true;
+    config.enable_parallel = true;
+    config.enable_memory_optimization = true;
+    config.enable_tensor_fusion = true;
+    config.rms_norm_eps = 1e-6f;
+    return config;
 }
 
 inline llama_mtp_config llama_mtp_config_conservative() {
-    return llama_mtp_config{
-        .n_predict_ahead = 2,
-        .confidence_threshold = 0.8f,
-        .enable_speculative = false,
-        .enable_parallel = false,
-        .enable_memory_optimization = false,
-        .enable_tensor_fusion = false,
-        .rms_norm_eps = 1e-6f
-    };
+    llama_mtp_config config;
+    config.n_predict_ahead = 2;
+    config.confidence_threshold = 0.8f;
+    config.enable_speculative = false;
+    config.enable_parallel = false;
+    config.enable_memory_optimization = false;
+    config.enable_tensor_fusion = false;
+    config.rms_norm_eps = 1e-6f;
+    return config;
 }

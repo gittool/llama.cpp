@@ -13781,7 +13781,11 @@ struct llm_build_glm4 : public llm_graph_context {
             
             // Process all MTP layers efficiently with parallel token prediction
             if (!mtp_layers.empty()) {
-                mtp_output = mtp_proc.process_mtp_layers(ctx0, inpL, mtp_layers, cb);
+                // Create a callback wrapper to match the expected signature
+                auto cb_wrapper = [this](ggml_tensor * tensor, const char * name, int layer) {
+                    this->cb(tensor, name, layer);
+                };
+                mtp_output = mtp_proc.process_mtp_layers(ctx0, inpL, mtp_layers, cb_wrapper);
                 if (!mtp_output) mtp_output = inpL; // Fallback to input
                 cb(mtp_output, "mtp_final_output", -1);
             }
@@ -13836,7 +13840,7 @@ struct llm_build_glm4 : public llm_graph_context {
                         // 4. Multi-token prediction head with enhanced validation
                         if (nextn.shared_head_head && cur && 
                             nextn.shared_head_head->ne[0] == cur->ne[0] &&
-                            nextn.shared_head_head->ne[1] <= model.hparams.n_vocab) {
+                            nextn.shared_head_head->ne[1] <= model.vocab.n_tokens()) {
                             
                             // Use optimized matrix multiplication for prediction head
                             cur = ggml_mul_mat(ctx0, nextn.shared_head_head, cur);
@@ -14047,7 +14051,11 @@ struct llm_build_glm4_moe : public llm_graph_context {
             
             // Process all MTP layers efficiently with parallel token prediction
             if (!mtp_layers.empty()) {
-                mtp_output = mtp_proc.process_mtp_layers(ctx0, inpL, mtp_layers, cb);
+                // Create a callback wrapper to match the expected signature
+                auto cb_wrapper = [this](ggml_tensor * tensor, const char * name, int layer) {
+                    this->cb(tensor, name, layer);
+                };
+                mtp_output = mtp_proc.process_mtp_layers(ctx0, inpL, mtp_layers, cb_wrapper);
                 if (!mtp_output) mtp_output = inpL; // Fallback to input
                 cb(mtp_output, "mtp_final_output", -1);
             }
