@@ -8,6 +8,7 @@
 
 #include "llama-kv-cache-unified.h"
 #include "llama-kv-cache-unified-iswa.h"
+#include "llama-mtp-optimized.h"  // For optimized MTP processing
 #include "llama-memory-hybrid.h"
 #include "llama-memory-recurrent.h"
 
@@ -13762,10 +13763,31 @@ struct llm_build_glm4 : public llm_graph_context {
             cb(inpL, "l_out", il);
         }
 
-        // Phase 2: NextN/MTP layers for multi-token prediction
+        // Phase 2: NextN/MTP layers for multi-token prediction using optimized processor
         ggml_tensor * mtp_output = inpL; // Default to transformer output
         if (hparams.nextn_predict_layers > 0) {
-            // Process MTP/NextN layers for parallel token prediction
+            // Use optimized MTP processor for better performance
+            
+            auto mtp_config = llama_mtp_config_fast(); // Use fast config for better performance
+            llama_mtp_processor mtp_proc(model, mtp_config);
+            
+            // Collect MTP layer indices
+            std::vector<int> mtp_layers;
+            for (int il = n_transformer_layers; il < n_layer; ++il) {
+                if (model.layers[il].nextn.eh_proj && model.layers[il].nextn.shared_head_head) {
+                    mtp_layers.push_back(il);
+                }
+            }
+            
+            // Process all MTP layers efficiently with parallel token prediction
+            if (!mtp_layers.empty()) {
+                mtp_output = mtp_proc.process_mtp_layers(ctx0, inpL, mtp_layers, cb);
+                if (!mtp_output) mtp_output = inpL; // Fallback to input
+                cb(mtp_output, "mtp_final_output", -1);
+            }
+            
+            // Manual fallback processing (kept for compatibility testing)
+            if (false) { // Disable manual processing - remove after verification
             for (int il = n_transformer_layers; il < n_layer; ++il) {
                 const auto & nextn = model.layers[il].nextn;
                 
@@ -13843,6 +13865,7 @@ struct llm_build_glm4 : public llm_graph_context {
                     cb(mtp_output, "nextn_skip", il);
                 }
             }
+            } // End manual fallback processing
         }
 
         // Final norm
@@ -14007,10 +14030,30 @@ struct llm_build_glm4_moe : public llm_graph_context {
             inpL = cur;
         }
 
-        // Phase 2: NextN/MTP layers for multi-token prediction
+        // Phase 2: NextN/MTP layers for multi-token prediction using optimized processor
         ggml_tensor * mtp_output = inpL; // Default to transformer output
         if (hparams.nextn_predict_layers > 0) {
-            // Process MTP/NextN layers for parallel token prediction
+            // Use optimized MTP processor for better performance
+            auto mtp_config = llama_mtp_config_fast(); // Use fast config for better performance
+            llama_mtp_processor mtp_proc(model, mtp_config);
+            
+            // Collect MTP layer indices  
+            std::vector<int> mtp_layers;
+            for (int il = n_transformer_layers; il < n_layer; ++il) {
+                if (model.layers[il].nextn.eh_proj && model.layers[il].nextn.shared_head_head) {
+                    mtp_layers.push_back(il);
+                }
+            }
+            
+            // Process all MTP layers efficiently with parallel token prediction
+            if (!mtp_layers.empty()) {
+                mtp_output = mtp_proc.process_mtp_layers(ctx0, inpL, mtp_layers, cb);
+                if (!mtp_output) mtp_output = inpL; // Fallback to input
+                cb(mtp_output, "mtp_final_output", -1);
+            }
+            
+            // Manual fallback processing (kept for compatibility testing)
+            if (false) { // Disable manual processing - remove after verification
             for (int il = n_transformer_layers; il < n_layer; ++il) {
                 const auto & nextn = model.layers[il].nextn;
                 
@@ -14076,6 +14119,7 @@ struct llm_build_glm4_moe : public llm_graph_context {
                     cb(mtp_output, "nextn_skip", il);
                 }
             }
+            } // End manual fallback processing
         }
 
         cur = mtp_output;

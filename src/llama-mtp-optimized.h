@@ -57,8 +57,16 @@ private:
     ) {
         const auto & nextn = model.layers[layer_idx].nextn;
         
-        if (!nextn.eh_proj || !nextn.shared_head_head) {
-            return input; // Skip if tensors not available
+        // Enhanced null pointer checks and dimension validation for safety
+        if (!nextn.eh_proj || !nextn.shared_head_head || !input) {
+            return input; // Skip if tensors not available or input is null
+        }
+        
+        // Validate tensor dimensions before processing
+        const int n_embd = model.hparams.n_embd;
+        if (nextn.eh_proj->ne[0] == 0 || nextn.eh_proj->ne[1] == 0 ||
+            input->ne[0] != n_embd) {
+            return input; // Skip if dimensions are invalid
         }
         
         // 1. Embedding projection with proper dimension handling
