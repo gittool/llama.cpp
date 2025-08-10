@@ -208,6 +208,15 @@ struct slot_params {
             {"timings_per_token",         timings_per_token},
             {"post_sampling_probs",       post_sampling_probs},
             {"lora",                      lora},
+            // Multi-Token Prediction (MTP) parameters
+            {"n_predict_tokens",          sampling.n_predict_tokens},
+            {"mtp_enabled",               sampling.mtp_enabled},
+            {"mtp_accept_rate",           sampling.mtp_accept_rate},
+            {"mtp_use_margin",            sampling.mtp_use_margin},
+            {"mtp_margin_thresh",         sampling.mtp_margin_thresh},
+            {"mtp_target_avg_len",        sampling.mtp_target_avg_len},
+            {"mtp_adapt_rate",            sampling.mtp_adapt_rate},
+            {"mtp_max_predict",           sampling.mtp_max_predict},
         };
     }
 };
@@ -258,6 +267,19 @@ struct server_task {
         defaults.n_keep      = params_base.n_keep;
         defaults.antiprompt  = params_base.antiprompt;
 
+        // Auto-enable MTP for supported models (GLM4/GLM4_MOE with NextN layers)
+        if (llama_model_has_mtp_support(model)) {
+            LOG("Auto-enabling MTP for supported model (NextN layers detected)\n");
+            defaults.sampling.mtp_enabled        = true;   // Force enable MTP
+            defaults.sampling.n_predict_tokens   = 4;      // Default predict 4 tokens
+            defaults.sampling.mtp_accept_rate    = 0.6f;   // Optimized acceptance rate
+            defaults.sampling.mtp_use_margin     = true;   // Use margin-based threshold
+            defaults.sampling.mtp_margin_thresh  = 2.0f;   // Optimized margin threshold
+            defaults.sampling.mtp_target_avg_len = 3.0f;   // Target 3 tokens per forward
+            defaults.sampling.mtp_adapt_rate     = 0.1f;   // Fast adaptation
+            defaults.sampling.mtp_max_predict    = 12;     // Allow up to 12 tokens
+        }
+
         // enabling this will output extra debug information in the HTTP responses from the server
         params.verbose           = params_base.verbosity > 9;
         params.timings_per_token = json_value(data, "timings_per_token", false);
@@ -298,6 +320,16 @@ struct server_task {
         params.sampling.n_probs            = json_value(data, "n_probs",            defaults.sampling.n_probs);
         params.sampling.min_keep           = json_value(data, "min_keep",           defaults.sampling.min_keep);
         params.post_sampling_probs         = json_value(data, "post_sampling_probs", defaults.post_sampling_probs);
+
+        // Multi-Token Prediction (MTP) parameters
+        params.sampling.n_predict_tokens   = json_value(data, "n_predict_tokens",   defaults.sampling.n_predict_tokens);
+        params.sampling.mtp_accept_rate    = json_value(data, "mtp_accept_rate",    defaults.sampling.mtp_accept_rate);
+        params.sampling.mtp_enabled        = json_value(data, "mtp_enabled",        defaults.sampling.mtp_enabled);
+        params.sampling.mtp_use_margin     = json_value(data, "mtp_use_margin",     defaults.sampling.mtp_use_margin);
+        params.sampling.mtp_margin_thresh  = json_value(data, "mtp_margin_thresh",  defaults.sampling.mtp_margin_thresh);
+        params.sampling.mtp_target_avg_len = json_value(data, "mtp_target_avg_len", defaults.sampling.mtp_target_avg_len);
+        params.sampling.mtp_adapt_rate     = json_value(data, "mtp_adapt_rate",     defaults.sampling.mtp_adapt_rate);
+        params.sampling.mtp_max_predict    = json_value(data, "mtp_max_predict",    defaults.sampling.mtp_max_predict);
 
         params.speculative.n_min = json_value(data, "speculative.n_min", defaults.speculative.n_min);
         params.speculative.n_max = json_value(data, "speculative.n_max", defaults.speculative.n_max);
@@ -5056,6 +5088,16 @@ int main(int argc, char ** argv) {
     state.store(SERVER_STATE_READY);
 
     LOG_INF("%s: model loaded\n", __func__);
+
+    // Display MTP support information
+    if (llama_model_has_mtp_support(ctx_server.model)) {
+        int32_t n_mtp_layers = llama_model_n_mtp_layers(ctx_server.model);
+        LOG_INF("%s: MTP (Multi-Token Prediction) ENABLED - %d NextN layers detected\n", __func__, n_mtp_layers);
+        LOG_INF("%s: MTP auto-configured: predict=%d tokens, accept_rate=%.2f, margin_thresh=%.1f\n", 
+               __func__, 4, 0.6f, 2.0f);
+    } else {
+        LOG_INF("%s: MTP (Multi-Token Prediction) not supported by this model\n", __func__);
+    }
 
     // print sample chat example to make it clear which template is used
     LOG_INF("%s: chat template, chat_template: %s, example_format: '%s'\n", __func__,
