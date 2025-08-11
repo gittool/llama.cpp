@@ -158,16 +158,16 @@ struct common_params_sampling {
     bool    no_perf            = false; // disable performance metrics
     bool    timing_per_token   = false;
 
-    // Multi-Token Prediction (MTP) parameters - ULTRA-FAST CONFIGURATION
-    int32_t n_predict_tokens   = 16;    // number of tokens to predict ahead for MTP (0 = disabled) - SPEEDUP: increased to 16 for maximum speed
-    float   mtp_accept_rate    = 0.4f;  // acceptance rate threshold for MTP predictions (0.0-1.0) - SPEEDUP: lowered to 0.4f for ultra-aggressive acceptance
+    // Multi-Token Prediction (MTP) parameters - STABLE HIGH-SPEED CONFIGURATION
+    int32_t n_predict_tokens   = 12;    // number of tokens to predict ahead for MTP (0 = disabled) - STABLE: balanced for consistent speed
+    float   mtp_accept_rate    = 0.5f;  // acceptance rate threshold for MTP predictions (0.0-1.0) - STABLE: balanced for consistent acceptance
     bool    mtp_enabled        = true;  // whether MTP is enabled - SPEEDUP: enabled by default
     // advanced MTP tuning parameters
     bool    mtp_use_margin     = true;  // use logit margin (max - second) instead of probability threshold - SPEEDUP: enabled for better thresholding
-    float   mtp_margin_thresh  = 1.5f;  // margin threshold (in logit space) when mtp_use_margin = true - SPEEDUP: lowered to 1.5f for maximum acceptance
-    float   mtp_target_avg_len = 4.0f;  // target average accepted tokens per forward (for adaptive n_predict_tokens) - SPEEDUP: increased to 4.0f for higher throughput
-    float   mtp_adapt_rate     = 0.15f; // EMA / adaptation step size - SPEEDUP: increased to 0.15f for faster adaptation
-    int32_t mtp_max_predict    = 16;    // upper bound for adaptive n_predict_tokens - SPEEDUP: increased to 16 for maximum prediction
+    float   mtp_margin_thresh  = 1.8f;  // margin threshold (in logit space) when mtp_use_margin = true - STABLE: balanced threshold for consistent quality
+    float   mtp_target_avg_len = 3.5f;  // target average accepted tokens per forward (for adaptive n_predict_tokens) - STABLE: realistic target for consistent performance
+    float   mtp_adapt_rate     = 0.08f; // EMA / adaptation step size - STABLE: slower adaptation for stability
+    int32_t mtp_max_predict    = 16;    // upper bound for adaptive n_predict_tokens - SPEEDUP: maximum prediction capability
 
     std::vector<std::string> dry_sequence_breakers = {"\n", ":", "\"", "*"};     // default sequence breakers for DRY
 

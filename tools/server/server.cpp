@@ -267,17 +267,17 @@ struct server_task {
         defaults.n_keep      = params_base.n_keep;
         defaults.antiprompt  = params_base.antiprompt;
 
-        // Auto-enable MTP for supported models (GLM4/GLM4_MOE with NextN layers) - ULTRA-FAST CONFIG
+        // Auto-enable MTP for supported models (GLM4/GLM4_MOE with NextN layers) - STABLE HIGH-SPEED CONFIG
         if (llama_model_has_mtp_support(model)) {
             LOG("Auto-enabling MTP for supported model (NextN layers detected)\n");
             defaults.sampling.mtp_enabled        = true;   // Force enable MTP
-            defaults.sampling.n_predict_tokens   = 16;     // SPEEDUP: Predict 16 tokens for maximum speed
-            defaults.sampling.mtp_accept_rate    = 0.4f;   // SPEEDUP: Ultra-aggressive acceptance rate
+            defaults.sampling.n_predict_tokens   = 12;     // STABLE: Balanced prediction for consistent speed
+            defaults.sampling.mtp_accept_rate    = 0.5f;   // STABLE: Balanced acceptance rate for consistency
             defaults.sampling.mtp_use_margin     = true;   // Use margin-based threshold
-            defaults.sampling.mtp_margin_thresh  = 1.5f;   // SPEEDUP: Lower margin threshold for more acceptance
-            defaults.sampling.mtp_target_avg_len = 4.0f;   // SPEEDUP: Target 4 tokens per forward for higher throughput
-            defaults.sampling.mtp_adapt_rate     = 0.15f;  // SPEEDUP: Faster adaptation rate
-            defaults.sampling.mtp_max_predict    = 16;     // SPEEDUP: Allow up to 16 tokens for maximum prediction
+            defaults.sampling.mtp_margin_thresh  = 1.8f;   // STABLE: Balanced threshold for consistent quality
+            defaults.sampling.mtp_target_avg_len = 3.5f;   // STABLE: Realistic target for consistent performance
+            defaults.sampling.mtp_adapt_rate     = 0.08f;  // STABLE: Slower adaptation for stability
+            defaults.sampling.mtp_max_predict    = 16;     // SPEEDUP: Maximum prediction capability
         }
 
         // enabling this will output extra debug information in the HTTP responses from the server
@@ -3612,7 +3612,7 @@ struct server_context {
                 if (slot.params.sampling.mtp_enabled) {
                     const common_mtp_metrics * mm = common_sampler_get_mtp_metrics(slot.smpl);
                     if (mm) {
-                        const bool periodic = (mm->calls & 0x1F) == 1; // Every 32 calls to avoid spam
+                        const bool periodic = (mm->calls & 0x3F) == 1; // Every 64 calls for stability (matching adaptation frequency)
                         const uint64_t total_tokens = mm->tokens_first_only + mm->tokens_extra;
                         const float speedup_ratio = total_tokens > 0 ? (float)total_tokens / mm->tokens_first_only : 1.0f;
                         
@@ -3628,7 +3628,7 @@ struct server_context {
                         }
                         
                         // Periodic detailed statistics
-                        if (periodic && mm->calls > 32) {
+                        if (periodic && mm->calls > 64) {
                             LOG_INF("📊 MTP Statistics [Slot %d]: First-only=%llu, Extra=%llu, Total=%llu, Efficiency=%.1f%%\n",
                                 slot.id,
                                 (unsigned long long) mm->tokens_first_only,
@@ -5103,10 +5103,10 @@ int main(int argc, char ** argv) {
     if (llama_model_has_mtp_support(ctx_server.model)) {
         int32_t n_mtp_layers = llama_model_n_mtp_layers(ctx_server.model);
         LOG_INF("%s: MTP (Multi-Token Prediction) ENABLED - %d NextN layers detected\n", __func__, n_mtp_layers);
-        LOG_INF("%s: MTP auto-configured: predict=%d tokens, accept_rate=%.2f, margin_thresh=%.1f - ULTRA-FAST MODE\n", 
-               __func__, 16, 0.4f, 1.5f);
-        LOG_INF("%s: MTP SPEEDUP SETTINGS: target_avg=%.1f tokens/forward, adapt_rate=%.2f, max_predict=%d\n",
-               __func__, 4.0f, 0.15f, 16);
+        LOG_INF("%s: MTP auto-configured: predict=%d tokens, accept_rate=%.2f, margin_thresh=%.1f - STABLE HIGH-SPEED MODE\n", 
+               __func__, 12, 0.5f, 1.8f);
+        LOG_INF("%s: MTP STABLE SETTINGS: target_avg=%.1f tokens/forward, adapt_rate=%.2f, max_predict=%d\n",
+               __func__, 3.5f, 0.08f, 16);
     } else {
         LOG_INF("%s: MTP (Multi-Token Prediction) not supported by this model\n", __func__);
     }

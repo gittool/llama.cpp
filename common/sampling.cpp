@@ -462,18 +462,24 @@ const common_mtp_metrics * common_sampler_get_mtp_metrics(const struct common_sa
 
 int common_sampler_mtp_adapt(struct common_sampler * sampler) {
     if (!sampler || !sampler->params.mtp_enabled) return 0;
-    // Simple proportional control towards target average length
+    
+    // STABLE MTP ADAPTATION - Less aggressive, more stable adjustments
     const double target = sampler->params.mtp_target_avg_len;
     const double cur    = sampler->mtp_metrics.ema_accept_len;
-    double delta = (target - cur) * sampler->params.mtp_adapt_rate;
+    const double delta = target - cur;
     int new_n = sampler->params.n_predict_tokens;
-    if (delta > 0.10) { // significant gap
-        new_n += 1;
-    } else if (delta < -0.10) {
-        new_n -= 1;
+    
+    // More conservative thresholds to prevent oscillation
+    if (delta > 0.5) { // Only adjust when significantly below target
+        new_n = std::min(new_n + 2, sampler->params.mtp_max_predict); // Increase by 2 for faster convergence
+    } else if (delta < -0.8) { // Only adjust when significantly above target  
+        new_n = std::max(new_n - 1, 4); // Decrease more slowly, minimum 4 tokens
     }
-    new_n = std::max(1, std::min(sampler->params.mtp_max_predict, new_n));
+    
+    // Keep within bounds but prefer higher values for speed
+    new_n = std::max(4, std::min(sampler->params.mtp_max_predict, new_n));
     sampler->params.n_predict_tokens = new_n;
+    
     return new_n;
 }
 
@@ -531,9 +537,10 @@ std::vector<llama_token> common_sampler_sample_mtp(
             sampler->mtp_metrics.tokens_extra += predicted;
         }
         const double accept_len = 1.0 + std::max(0, predicted);
-        sampler->mtp_metrics.ema_accept_len = 0.9 * sampler->mtp_metrics.ema_accept_len + 0.1 * accept_len;
-        // adapt occasionally
-        if ((sampler->mtp_metrics.calls & 0x1F) == 0) {
+        // STABLE EMA: Slower moving average for more stability (0.95 vs 0.9)
+        sampler->mtp_metrics.ema_accept_len = 0.95 * sampler->mtp_metrics.ema_accept_len + 0.05 * accept_len;
+        // STABLE ADAPTATION: Adapt less frequently for stability (every 64 calls instead of 32)
+        if ((sampler->mtp_metrics.calls & 0x3F) == 0) {
             common_sampler_mtp_adapt(sampler);
         }
     }
