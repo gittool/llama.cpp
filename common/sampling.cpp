@@ -469,15 +469,17 @@ int common_sampler_mtp_adapt(struct common_sampler * sampler) {
     const double delta = target - cur;
     int new_n = sampler->params.n_predict_tokens;
     
-    // More conservative thresholds to prevent oscillation
-    if (delta > 0.5) { // Only adjust when significantly below target
+    // SPEED-OPTIMIZED: More aggressive adjustment for higher performance
+    if (delta > 0.3) { // Adjust when moderately below target (was 0.5)
         new_n = std::min(new_n + 2, sampler->params.mtp_max_predict); // Increase by 2 for faster convergence
-    } else if (delta < -0.8) { // Only adjust when significantly above target  
-        new_n = std::max(new_n - 1, 4); // Decrease more slowly, minimum 4 tokens
+    } else if (delta > 0.1) { // Small increase for minor gaps
+        new_n = std::min(new_n + 1, sampler->params.mtp_max_predict); // Gradual increase
+    } else if (delta < -1.0) { // Only decrease when significantly above target  
+        new_n = std::max(new_n - 1, 6); // Decrease slowly, minimum 6 tokens for speed
     }
     
-    // Keep within bounds but prefer higher values for speed
-    new_n = std::max(4, std::min(sampler->params.mtp_max_predict, new_n));
+    // Keep within bounds with higher minimum for speed
+    new_n = std::max(6, std::min(sampler->params.mtp_max_predict, new_n));
     sampler->params.n_predict_tokens = new_n;
     
     return new_n;
@@ -539,8 +541,8 @@ std::vector<llama_token> common_sampler_sample_mtp(
         const double accept_len = 1.0 + std::max(0, predicted);
         // STABLE EMA: Slower moving average for more stability (0.95 vs 0.9)
         sampler->mtp_metrics.ema_accept_len = 0.95 * sampler->mtp_metrics.ema_accept_len + 0.05 * accept_len;
-        // STABLE ADAPTATION: Adapt less frequently for stability (every 64 calls instead of 32)
-        if ((sampler->mtp_metrics.calls & 0x3F) == 0) {
+        // SPEED ADAPTATION: Adapt every 48 calls for faster optimization
+        if ((sampler->mtp_metrics.calls % 48) == 0) {
             common_sampler_mtp_adapt(sampler);
         }
     }

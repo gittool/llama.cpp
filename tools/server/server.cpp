@@ -267,17 +267,17 @@ struct server_task {
         defaults.n_keep      = params_base.n_keep;
         defaults.antiprompt  = params_base.antiprompt;
 
-        // Auto-enable MTP for supported models (GLM4/GLM4_MOE with NextN layers) - STABLE HIGH-SPEED CONFIG
+        // Auto-enable MTP for supported models (GLM4/GLM4_MOE with NextN layers) - OPTIMIZED SPEED CONFIG
         if (llama_model_has_mtp_support(model)) {
             LOG("Auto-enabling MTP for supported model (NextN layers detected)\n");
             defaults.sampling.mtp_enabled        = true;   // Force enable MTP
-            defaults.sampling.n_predict_tokens   = 12;     // STABLE: Balanced prediction for consistent speed
-            defaults.sampling.mtp_accept_rate    = 0.5f;   // STABLE: Balanced acceptance rate for consistency
+            defaults.sampling.n_predict_tokens   = 14;     // SPEED: Increased prediction for higher throughput
+            defaults.sampling.mtp_accept_rate    = 0.45f;  // SPEED: More aggressive acceptance rate
             defaults.sampling.mtp_use_margin     = true;   // Use margin-based threshold
-            defaults.sampling.mtp_margin_thresh  = 1.8f;   // STABLE: Balanced threshold for consistent quality
-            defaults.sampling.mtp_target_avg_len = 3.5f;   // STABLE: Realistic target for consistent performance
-            defaults.sampling.mtp_adapt_rate     = 0.08f;  // STABLE: Slower adaptation for stability
-            defaults.sampling.mtp_max_predict    = 16;     // SPEEDUP: Maximum prediction capability
+            defaults.sampling.mtp_margin_thresh  = 1.6f;   // SPEED: Lower threshold for more acceptance
+            defaults.sampling.mtp_target_avg_len = 4.0f;   // SPEED: Higher target for better performance
+            defaults.sampling.mtp_adapt_rate     = 0.12f;  // SPEED: Faster adaptation while maintaining stability
+            defaults.sampling.mtp_max_predict    = 18;     // SPEED: Increased maximum capability
         }
 
         // enabling this will output extra debug information in the HTTP responses from the server
@@ -1480,6 +1480,23 @@ struct server_slot {
 
             t_last_used = ggml_time_us();
             t_token_generation = (ggml_time_us() - t_start_generation) / 1e3;
+            
+            // MTP Performance Summary - Final report when slot is released
+            if (params.sampling.mtp_enabled && smpl) {
+                const common_mtp_metrics * mm = common_sampler_get_mtp_metrics(smpl);
+                if (mm && mm->calls > 0) {
+                    const uint64_t total_tokens = mm->tokens_first_only + mm->tokens_extra;
+                    const float speedup_ratio = mm->tokens_first_only > 0 ? (float)total_tokens / mm->tokens_first_only : 1.0f;
+                    LOG_INF("🚀 MTP Performance [Slot %d]: Avg=%.2f tok/forward, Total=%llu tokens (%.2fx speedup), Extra=%llu, Calls=%llu\n",
+                        id,
+                        (float)(mm->ema_accept_len),
+                        (unsigned long long) total_tokens,
+                        speedup_ratio,
+                        (unsigned long long) mm->tokens_extra,
+                        (unsigned long long) mm->calls);
+                }
+            }
+            
             state = SLOT_STATE_IDLE;
             callback_on_release(id);
         }
@@ -3608,36 +3625,7 @@ struct server_context {
                     accepted = 1;
                 }
 
-                // MTP token count logging - Enhanced for visibility
-                if (slot.params.sampling.mtp_enabled) {
-                    const common_mtp_metrics * mm = common_sampler_get_mtp_metrics(slot.smpl);
-                    if (mm) {
-                        const bool periodic = (mm->calls & 0x3F) == 1; // Every 64 calls for stability (matching adaptation frequency)
-                        const uint64_t total_tokens = mm->tokens_first_only + mm->tokens_extra;
-                        const float speedup_ratio = total_tokens > 0 ? (float)total_tokens / mm->tokens_first_only : 1.0f;
-                        
-                        if (predicted_extra > 0 || periodic) {
-                            // Always show when extra tokens are predicted
-                            LOG_INF("🚀 MTP Performance [Slot %d]: Extra=%d tokens, Avg=%.2f tok/forward, Total=%llu tokens (%.2fx speedup), Calls=%llu\n",
-                                slot.id,
-                                predicted_extra,
-                                (float)(mm->ema_accept_len),
-                                (unsigned long long) total_tokens,
-                                speedup_ratio,
-                                (unsigned long long) mm->calls);
-                        }
-                        
-                        // Periodic detailed statistics
-                        if (periodic && mm->calls > 64) {
-                            LOG_INF("📊 MTP Statistics [Slot %d]: First-only=%llu, Extra=%llu, Total=%llu, Efficiency=%.1f%%\n",
-                                slot.id,
-                                (unsigned long long) mm->tokens_first_only,
-                                (unsigned long long) mm->tokens_extra,
-                                (unsigned long long) total_tokens,
-                                mm->tokens_extra > 0 ? 100.0f * mm->tokens_extra / total_tokens : 0.0f);
-                        }
-                    }
-                }
+                // MTP token count logging - removed real-time logging (will show summary at slot end)
 
                 // 将来 fast-accept 実装箇所:
                 if (mtp_used && predicted_extra > 0 && llama_context_can_speculative_mtp(ctx)) {
@@ -5103,10 +5091,10 @@ int main(int argc, char ** argv) {
     if (llama_model_has_mtp_support(ctx_server.model)) {
         int32_t n_mtp_layers = llama_model_n_mtp_layers(ctx_server.model);
         LOG_INF("%s: MTP (Multi-Token Prediction) ENABLED - %d NextN layers detected\n", __func__, n_mtp_layers);
-        LOG_INF("%s: MTP auto-configured: predict=%d tokens, accept_rate=%.2f, margin_thresh=%.1f - STABLE HIGH-SPEED MODE\n", 
-               __func__, 12, 0.5f, 1.8f);
-        LOG_INF("%s: MTP STABLE SETTINGS: target_avg=%.1f tokens/forward, adapt_rate=%.2f, max_predict=%d\n",
-               __func__, 3.5f, 0.08f, 16);
+        LOG_INF("%s: MTP auto-configured: predict=%d tokens, accept_rate=%.2f, margin_thresh=%.1f - OPTIMIZED SPEED MODE\n", 
+               __func__, 14, 0.45f, 1.6f);
+        LOG_INF("%s: MTP SPEED SETTINGS: target_avg=%.1f tokens/forward, adapt_rate=%.2f, max_predict=%d\n",
+               __func__, 4.0f, 0.12f, 18);
     } else {
         LOG_INF("%s: MTP (Multi-Token Prediction) not supported by this model\n", __func__);
     }
