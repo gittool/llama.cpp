@@ -28,28 +28,49 @@ public:
     llama_mtp_processor(const llama_model & model_, const llama_mtp_config & config_) 
         : model(model_), config(config_) {}
     
-    // ULTRA-FAST Main MTP processing function with parallel optimization
+    // ULTRA-FAST Main MTP processing function with parallel optimization and safety
     ggml_tensor * process_mtp_layers(
         ggml_context * ctx0,
         ggml_tensor * input_tensor,
         const std::vector<int> & layer_indices,
         const std::function<void(ggml_tensor *, const char *, int)> & callback
     ) {
-        if (layer_indices.empty()) {
+        // Enhanced safety checks
+        if (!ctx0 || !input_tensor || layer_indices.empty()) {
             return input_tensor;
+        }
+        
+        // Validate input tensor dimensions
+        if (input_tensor->ne[0] == 0 || input_tensor->ne[1] == 0) {
+            return input_tensor; // Invalid input tensor
         }
         
         ggml_tensor * current = input_tensor;
         
-        // SPEED OPTIMIZATION: Process multiple layers in parallel when enabled
-        if (config.enable_parallel && layer_indices.size() > 1) {
-            return process_mtp_layers_parallel(ctx0, current, layer_indices, callback);
-        } else {
-            // Sequential processing for single layers or when parallel is disabled
-            for (int layer_idx : layer_indices) {
-                current = process_single_mtp_layer(ctx0, current, layer_idx, callback);
+        try {
+            // SPEED OPTIMIZATION: Process multiple layers in parallel when enabled
+            if (config.enable_parallel && layer_indices.size() > 1) {
+                ggml_tensor * result = process_mtp_layers_parallel(ctx0, current, layer_indices, callback);
+                return result ? result : input_tensor; // Fallback to input if processing fails
+            } else {
+                // Sequential processing for single layers or when parallel is disabled
+                for (int layer_idx : layer_indices) {
+                    // Validate layer index
+                    if (layer_idx < 0 || layer_idx >= static_cast<int>(model.layers.size())) {
+                        continue; // Skip invalid layer indices
+                    }
+                    
+                    ggml_tensor * layer_result = process_single_mtp_layer(ctx0, current, layer_idx, callback);
+                    if (layer_result) {
+                        current = layer_result;
+                    }
+                    // If layer processing fails, continue with current tensor
+                }
+                return current;
             }
-            return current;
+        } catch (...) {
+            // Fallback: return input tensor if any processing fails
+            return input_tensor;
         }
     }
 
@@ -196,7 +217,7 @@ private:
         return predictions ? predictions : input;
     }
     
-    // ULTRA-FAST normalizations with minimal operations
+    // ULTRA-FAST normalizations with minimal operations and safety checks
     ggml_tensor * apply_normalizations_fast(
         ggml_context * ctx0,
         const llama_layer_nextn & nextn,
@@ -204,27 +225,46 @@ private:
         int layer_idx,
         const std::function<void(ggml_tensor *, const char *, int)> & cb
     ) {
+        if (!input || !ctx0) return input;
+        
         ggml_tensor * current = input;
         
         // SPEED OPTIMIZATION: Apply only necessary normalizations based on config
         if (nextn.enorm && (layer_idx == 0 || !config.enable_memory_optimization)) {
-            // Input normalization with fast epsilon
-            current = ggml_rms_norm(ctx0, current, config.rms_norm_eps);
-            current = ggml_mul(ctx0, current, nextn.enorm);
-            cb(current, "mtp_enorm_fast", layer_idx);
+            // Safety check: validate tensor dimensions before RMS norm
+            if (nextn.enorm->ne[0] == current->ne[0] && nextn.enorm->ne[1] <= current->ne[1]) {
+                // Input normalization with fast epsilon
+                current = ggml_rms_norm(ctx0, current, config.rms_norm_eps);
+                if (current) {
+                    // Safety check: ensure compatible dimensions for multiplication
+                    if (nextn.enorm->ne[0] == current->ne[0]) {
+                        current = ggml_mul(ctx0, current, nextn.enorm);
+                        cb(current, "mtp_enorm_fast", layer_idx);
+                    } else {
+                        // Dimension mismatch - skip this normalization
+                        current = input;
+                    }
+                }
+            }
         }
         
         // SPEED OPTIMIZATION: Skip hidden normalization in aggressive mode
-        if (nextn.hnorm && config.confidence_threshold > 0.5f) {
-            current = ggml_rms_norm(ctx0, current, config.rms_norm_eps);
-            current = ggml_mul(ctx0, current, nextn.hnorm);
-            cb(current, "mtp_hnorm_fast", layer_idx);
+        if (nextn.hnorm && config.confidence_threshold > 0.5f && current) {
+            // Safety check: validate tensor dimensions before RMS norm
+            if (nextn.hnorm->ne[0] == current->ne[0] && nextn.hnorm->ne[1] <= current->ne[1]) {
+                ggml_tensor * normalized = ggml_rms_norm(ctx0, current, config.rms_norm_eps);
+                if (normalized && nextn.hnorm->ne[0] == normalized->ne[0]) {
+                    current = ggml_mul(ctx0, normalized, nextn.hnorm);
+                    cb(current, "mtp_hnorm_fast", layer_idx);
+                }
+                // If dimension check fails, keep current tensor unchanged
+            }
         }
         
-        return current;
+        return current ? current : input;
     }
     
-    // ULTRA-FAST prediction head with optimized operations
+    // ULTRA-FAST prediction head with optimized operations and safety checks
     ggml_tensor * apply_prediction_head_fast(
         ggml_context * ctx0,
         const llama_layer_nextn & nextn,
@@ -232,23 +272,39 @@ private:
         int layer_idx,
         const std::function<void(ggml_tensor *, const char *, int)> & cb
     ) {
-        if (!nextn.shared_head_head || !input) return nullptr;
+        if (!nextn.shared_head_head || !input || !ctx0) return nullptr;
         
-        // SPEED OPTIMIZATION: Fast dimension check
+        // Enhanced safety checks for tensor dimensions
+        if (nextn.shared_head_head->ne[0] == 0 || nextn.shared_head_head->ne[1] == 0 ||
+            input->ne[0] == 0 || input->ne[1] == 0) {
+            return nullptr; // Invalid tensor dimensions
+        }
+        
+        // SPEED OPTIMIZATION: Fast dimension check with proper matrix multiplication validation
         if (nextn.shared_head_head->ne[0] != input->ne[0] ||
-            nextn.shared_head_head->ne[1] > model.vocab.n_tokens()) {
+            nextn.shared_head_head->ne[1] > model.vocab.n_tokens() ||
+            nextn.shared_head_head->ne[1] == 0) {
             return nullptr;
         }
         
-        // SPEED OPTIMIZATION: Use fused matrix multiplication
+        // SPEED OPTIMIZATION: Use fused matrix multiplication with safety
         ggml_tensor * predictions = ggml_mul_mat(ctx0, nextn.shared_head_head, input);
+        if (!predictions) return nullptr;
+        
         cb(predictions, "mtp_head_fast", layer_idx);
         
-        // SPEED OPTIMIZATION: Skip final normalization in ultra-fast mode
-        if (nextn.shared_head_norm && config.confidence_threshold > 0.4f) {
-            predictions = ggml_rms_norm(ctx0, predictions, config.rms_norm_eps);
-            predictions = ggml_mul(ctx0, predictions, nextn.shared_head_norm);
-            cb(predictions, "mtp_head_norm_fast", layer_idx);
+        // SPEED OPTIMIZATION: Skip final normalization in ultra-fast mode with safety checks
+        if (nextn.shared_head_norm && config.confidence_threshold > 0.4f && predictions) {
+            // Validate dimensions before normalization
+            if (nextn.shared_head_norm->ne[0] == predictions->ne[0] && 
+                nextn.shared_head_norm->ne[1] <= predictions->ne[1]) {
+                ggml_tensor * normalized = ggml_rms_norm(ctx0, predictions, config.rms_norm_eps);
+                if (normalized && nextn.shared_head_norm->ne[0] == normalized->ne[0]) {
+                    predictions = ggml_mul(ctx0, normalized, nextn.shared_head_norm);
+                    cb(predictions, "mtp_head_norm_fast", layer_idx);
+                }
+                // If normalization fails, keep original predictions
+            }
         }
         
         return predictions;
@@ -342,7 +398,7 @@ private:
         return result;
     }
     
-    // Apply all available normalizations
+    // Apply all available normalizations with safety checks
     ggml_tensor * apply_normalizations(
         ggml_context * ctx0,
         const llama_layer_nextn & nextn,
@@ -350,26 +406,40 @@ private:
         int layer_idx,
         const std::function<void(ggml_tensor *, const char *, int)> & cb
     ) {
+        if (!input || !ctx0) return input;
+        
         ggml_tensor * current = input;
         
-        // Input normalization with configurable epsilon
-        if (nextn.enorm) {
-            current = ggml_rms_norm(ctx0, current, config.rms_norm_eps);
-            current = ggml_mul(ctx0, current, nextn.enorm);
-            cb(current, "mtp_enorm", layer_idx);
+        // Input normalization with configurable epsilon and safety checks
+        if (nextn.enorm && current) {
+            // Validate tensor dimensions before operations
+            if (nextn.enorm->ne[0] == current->ne[0] && nextn.enorm->ne[1] <= current->ne[1]) {
+                ggml_tensor * normalized = ggml_rms_norm(ctx0, current, config.rms_norm_eps);
+                if (normalized && nextn.enorm->ne[0] == normalized->ne[0]) {
+                    current = ggml_mul(ctx0, normalized, nextn.enorm);
+                    cb(current, "mtp_enorm", layer_idx);
+                }
+                // If normalization fails, keep current tensor unchanged
+            }
         }
         
-        // Hidden state normalization with configurable epsilon
-        if (nextn.hnorm) {
-            current = ggml_rms_norm(ctx0, current, config.rms_norm_eps);
-            current = ggml_mul(ctx0, current, nextn.hnorm);
-            cb(current, "mtp_hnorm", layer_idx);
+        // Hidden state normalization with configurable epsilon and safety checks
+        if (nextn.hnorm && current) {
+            // Validate tensor dimensions before operations
+            if (nextn.hnorm->ne[0] == current->ne[0] && nextn.hnorm->ne[1] <= current->ne[1]) {
+                ggml_tensor * normalized = ggml_rms_norm(ctx0, current, config.rms_norm_eps);
+                if (normalized && nextn.hnorm->ne[0] == normalized->ne[0]) {
+                    current = ggml_mul(ctx0, normalized, nextn.hnorm);
+                    cb(current, "mtp_hnorm", layer_idx);
+                }
+                // If normalization fails, keep current tensor unchanged
+            }
         }
         
-        return current;
+        return current ? current : input;
     }
     
-    // Apply prediction head with multi-token capability
+    // Apply prediction head with multi-token capability and enhanced safety
     ggml_tensor * apply_prediction_head(
         ggml_context * ctx0,
         const llama_layer_nextn & nextn,
@@ -377,22 +447,38 @@ private:
         int layer_idx,
         const std::function<void(ggml_tensor *, const char *, int)> & cb
     ) {
-        if (!nextn.shared_head_head || !input) return nullptr;
+        if (!nextn.shared_head_head || !input || !ctx0) return nullptr;
+        
+        // Enhanced safety checks for tensor dimensions
+        if (nextn.shared_head_head->ne[0] == 0 || nextn.shared_head_head->ne[1] == 0 ||
+            input->ne[0] == 0 || input->ne[1] == 0) {
+            return nullptr;
+        }
         
         // Safety check for dimension compatibility
         if (nextn.shared_head_head->ne[0] != input->ne[0] ||
-            nextn.shared_head_head->ne[1] > model.vocab.n_tokens()) {
+            nextn.shared_head_head->ne[1] > model.vocab.n_tokens() ||
+            nextn.shared_head_head->ne[1] == 0) {
             return nullptr;
         }
         
         ggml_tensor * predictions = ggml_mul_mat(ctx0, nextn.shared_head_head, input);
+        if (!predictions) return nullptr;
+        
         cb(predictions, "mtp_head", layer_idx);
         
-        // Final normalization with configurable epsilon
-        if (nextn.shared_head_norm) {
-            predictions = ggml_rms_norm(ctx0, predictions, config.rms_norm_eps);
-            predictions = ggml_mul(ctx0, predictions, nextn.shared_head_norm);
-            cb(predictions, "mtp_head_norm", layer_idx);
+        // Final normalization with configurable epsilon and safety checks
+        if (nextn.shared_head_norm && predictions) {
+            // Validate dimensions before normalization
+            if (nextn.shared_head_norm->ne[0] == predictions->ne[0] && 
+                nextn.shared_head_norm->ne[1] <= predictions->ne[1]) {
+                ggml_tensor * normalized = ggml_rms_norm(ctx0, predictions, config.rms_norm_eps);
+                if (normalized && nextn.shared_head_norm->ne[0] == normalized->ne[0]) {
+                    predictions = ggml_mul(ctx0, normalized, nextn.shared_head_norm);
+                    cb(predictions, "mtp_head_norm", layer_idx);
+                }
+                // If normalization fails, keep original predictions
+            }
         }
         
         return predictions;
