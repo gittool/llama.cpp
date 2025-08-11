@@ -460,6 +460,31 @@ const common_mtp_metrics * common_sampler_get_mtp_metrics(const struct common_sa
     return &sampler->mtp_metrics;
 }
 
+// Print detailed MTP metrics
+void common_sampler_print_mtp_metrics(const struct common_sampler * sampler) {
+    const auto * metrics = common_sampler_get_mtp_metrics(sampler);
+    if (!metrics) {
+        printf("MTP metrics not available (MTP disabled or sampler null)\n");
+        return;
+    }
+    
+    printf("\n=== Common Sampler MTP Metrics ===\n");
+    printf("Total MTP calls: %lu\n", metrics->calls);
+    printf("First token only: %lu (%.1f%%)\n", metrics->tokens_first_only, 
+           metrics->calls > 0 ? (double(metrics->tokens_first_only) / metrics->calls) * 100.0 : 0.0);
+    printf("Extra tokens accepted: %lu\n", metrics->tokens_extra);
+    printf("Average accept length: %.2f tokens\n", metrics->ema_accept_len);
+    
+    if (metrics->calls > 0) {
+        double total_tokens = metrics->tokens_first_only + metrics->tokens_extra;
+        printf("Total tokens: %.0f\n", total_tokens);
+        printf("Tokens per call: %.2f\n", total_tokens / metrics->calls);
+        printf("MTP success rate: %.1f%% (calls with >1 token)\n", 
+               ((metrics->calls - metrics->tokens_first_only) / double(metrics->calls)) * 100.0);
+    }
+    printf("==================================\n");
+}
+
 int common_sampler_mtp_adapt(struct common_sampler * sampler) {
     if (!sampler || !sampler->params.mtp_enabled) return 0;
     

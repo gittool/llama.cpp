@@ -6,6 +6,25 @@
 #include <vector>
 #include <unordered_map>
 #include <thread>
+#include <chrono>
+
+// Performance monitoring metrics for MTP operations
+struct llama_mtp_perf_metrics {
+    uint64_t total_calls = 0;           // Total MTP calls
+    uint64_t successful_calls = 0;      // Successful MTP operations
+    uint64_t fallback_calls = 0;        // Times fallback was used
+    uint64_t validation_failures = 0;   // Dimension validation failures
+    double total_latency_ms = 0.0;      // Total latency in milliseconds
+    double total_throughput_tokens = 0.0; // Total tokens processed
+    uint64_t cache_hits = 0;            // Weight cache hits
+    uint64_t cache_misses = 0;          // Weight cache misses
+    
+    // Real-time metrics
+    double avg_latency_ms() const { return total_calls > 0 ? total_latency_ms / total_calls : 0.0; }
+    double success_rate() const { return total_calls > 0 ? double(successful_calls) / total_calls : 0.0; }
+    double tokens_per_ms() const { return total_latency_ms > 0 ? total_throughput_tokens / total_latency_ms : 0.0; }
+    double cache_hit_rate() const { return (cache_hits + cache_misses) > 0 ? double(cache_hits) / (cache_hits + cache_misses) : 0.0; }
+};
 
 // MTP Configuration structure with enhanced options
 struct llama_mtp_config {
@@ -16,6 +35,7 @@ struct llama_mtp_config {
     bool enable_memory_optimization = true;  // Enable memory access optimization
     bool enable_tensor_fusion = true;   // Enable tensor operation fusion
     float rms_norm_eps = 1e-6f;         // RMS normalization epsilon
+    bool enable_performance_monitoring = true; // Enable detailed performance tracking
 };
 
 // Enhanced MTP processor with parallel token prediction
@@ -23,6 +43,49 @@ class llama_mtp_processor {
 private:
     const llama_model & model;
     llama_mtp_config config;
+    mutable llama_mtp_perf_metrics metrics; // Performance tracking
+    
+    // Enhanced dimension validation and error handling
+    bool validate_mtp_tensor_dimensions(
+        const llama_layer_nextn & nextn,
+        ggml_tensor * input,
+        int n_embd) const {
+        if (!input || !nextn.eh_proj || !nextn.shared_head_head) {
+            return false;
+        }
+        
+        // Validate input tensor
+        if (input->ne[0] != n_embd || input->ne[1] == 0) {
+            return false;
+        }
+        
+        // Validate eh_proj dimensions
+        if (nextn.eh_proj->ne[0] == 0 || nextn.eh_proj->ne[1] == 0) {
+            return false;
+        }
+        
+        // Allow standard GLM4 (n_embd x n_embd) or GLM4_MOE (2*n_embd x n_embd)
+        bool valid_eh_proj = (nextn.eh_proj->ne[0] == n_embd && nextn.eh_proj->ne[1] == n_embd) ||
+                            (nextn.eh_proj->ne[0] == 2 * n_embd && nextn.eh_proj->ne[1] == n_embd);
+        
+        if (!valid_eh_proj) {
+            return false;
+        }
+        
+        // Validate shared_head dimensions
+        if (nextn.shared_head_head->ne[1] > model.vocab.n_tokens() || 
+            nextn.shared_head_head->ne[1] == 0) {
+            return false;
+        }
+        
+        return true;
+    }
+    
+    // Fallback to single token processing
+    ggml_tensor * fallback_to_single_token(ggml_tensor * input) const {
+        // Simply return the input tensor unchanged as fallback
+        return input;
+    }
     
 public:
     llama_mtp_processor(const llama_model & model_, const llama_mtp_config & config_) 
@@ -35,13 +98,27 @@ public:
         const std::vector<int> & layer_indices,
         const std::function<void(ggml_tensor *, const char *, int)> & callback
     ) {
+        // Performance monitoring start
+        auto start_time = std::chrono::high_resolution_clock::now();
+        if (config.enable_performance_monitoring) {
+            metrics.total_calls++;
+        }
+        
         // Enhanced safety checks
         if (!ctx0 || !input_tensor || layer_indices.empty()) {
+            if (config.enable_performance_monitoring) {
+                metrics.validation_failures++;
+                metrics.fallback_calls++;
+            }
             return input_tensor;
         }
         
         // Validate input tensor dimensions
         if (input_tensor->ne[0] == 0 || input_tensor->ne[1] == 0) {
+            if (config.enable_performance_monitoring) {
+                metrics.validation_failures++;
+                metrics.fallback_calls++;
+            }
             return input_tensor; // Invalid input tensor
         }
         
@@ -66,10 +143,25 @@ public:
                     }
                     // If layer processing fails, continue with current tensor
                 }
+                // Performance monitoring completion for sequential processing
+                if (config.enable_performance_monitoring) {
+                    auto end_time = std::chrono::high_resolution_clock::now();
+                    auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time);
+                    metrics.total_latency_ms += duration.count() / 1000.0;
+                    metrics.successful_calls++;
+                    metrics.total_throughput_tokens += layer_indices.size() * config.n_predict_ahead;
+                }
+                
                 return current;
             }
         } catch (...) {
             // Fallback: return input tensor if any processing fails
+            if (config.enable_performance_monitoring) {
+                auto end_time = std::chrono::high_resolution_clock::now();
+                auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time);
+                metrics.total_latency_ms += duration.count() / 1000.0;
+                metrics.fallback_calls++;
+            }
             return input_tensor;
         }
     }
@@ -191,17 +283,12 @@ private:
         const std::function<void(ggml_tensor *, const char *, int)> & cb
     ) {
         const auto & nextn = model.layers[layer_idx].nextn;
-        
-        // Enhanced null pointer checks and dimension validation for safety
-        if (!nextn.eh_proj || !nextn.shared_head_head || !input) {
-            return input; // Skip if tensors not available or input is null
-        }
-        
-        // Validate tensor dimensions before processing
         const int n_embd = model.hparams.n_embd;
-        if (nextn.eh_proj->ne[0] == 0 || nextn.eh_proj->ne[1] == 0 ||
-            input->ne[0] != n_embd) {
-            return input; // Skip if dimensions are invalid
+        
+        // Enhanced dimension validation with fallback
+        if (!validate_mtp_tensor_dimensions(nextn, input, n_embd)) {
+            cb(input, "mtp_validation_failed", layer_idx);
+            return fallback_to_single_token(input);
         }
         
         // 1. Embedding projection with proper dimension handling
@@ -343,7 +430,12 @@ private:
             auto cached = weight_cache.find(cache_key);
             if (cached != weight_cache.end() && cached->second) {
                 weight_for_mul = cached->second;
+                if (config.enable_performance_monitoring) {
+                    metrics.cache_hits++;
+                }
                 cb(weight_for_mul, "mtp_proj_cached", layer_idx);
+            } else if (config.enable_performance_monitoring) {
+                metrics.cache_misses++;
             }
         }
         
@@ -528,6 +620,159 @@ private:
             return std::max(8, config.n_predict_ahead / 4); // Conservative batch size
         }
     }
+
+    // Get current performance metrics
+    const llama_mtp_perf_metrics & get_performance_metrics() const {
+        return metrics;
+    }
+
+    // Reset performance metrics
+    void reset_performance_metrics() {
+        metrics = llama_mtp_perf_metrics{};
+    }
+
+    // Print detailed performance report
+    void print_performance_report() const {
+        if (!config.enable_performance_monitoring) {
+            printf("MTP Performance Monitoring is disabled\n");
+            return;
+        }
+        
+        printf("=== MTP Performance Report ===\n");
+        printf("Total Calls: %lu\n", metrics.total_calls);
+        printf("Successful: %lu (%.1f%%)\n", metrics.successful_calls, metrics.success_rate() * 100.0);
+        printf("Fallback: %lu (%.1f%%)\n", metrics.fallback_calls, 
+               metrics.total_calls > 0 ? (double(metrics.fallback_calls) / metrics.total_calls) * 100.0 : 0.0);
+        printf("Validation Failures: %lu (%.1f%%)\n", metrics.validation_failures, 
+               metrics.total_calls > 0 ? (double(metrics.validation_failures) / metrics.total_calls) * 100.0 : 0.0);
+        printf("Average Latency: %.2f ms\n", metrics.avg_latency_ms());
+        printf("Throughput: %.2f tokens/ms\n", metrics.tokens_per_ms());
+        printf("Cache Hit Rate: %.1f%%\n", metrics.cache_hit_rate() * 100.0);
+        printf("Total Tokens Processed: %.0f\n", metrics.total_throughput_tokens);
+        printf("=============================\n");
+    }
+
+    // vLLM-style MTP processing with full transformer layer
+    ggml_tensor * process_vllm_style_mtp(
+        ggml_context * ctx0,
+        ggml_tensor * hidden_state_inp,
+        llama_token last_token_id,
+        int n_past,
+        int layer_idx,
+        const std::function<void(ggml_tensor *, const char *, int)> & cb
+    ) {
+        if (config.enable_performance_monitoring) {
+            metrics.total_calls++;
+        }
+
+        const auto & mtp_layer = model.layers[layer_idx];
+        const auto & nextn = mtp_layer.nextn;
+
+        // Enhanced validation with fallback
+        if (!validate_mtp_tensor_dimensions(nextn, hidden_state_inp, model.hparams.n_embd)) {
+            cb(hidden_state_inp, "vllm_mtp_validation_failed", layer_idx);
+            if (config.enable_performance_monitoring) {
+                metrics.validation_failures++;
+                metrics.fallback_calls++;
+            }
+            return fallback_to_single_token(hidden_state_inp);
+        }
+
+        try {
+            // 1. Get MTP embedding for last (conventionally sampled) token
+            ggml_tensor * inp_token_id = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, 1);
+            ggml_set_i32(inp_token_id, last_token_id);
+            
+            ggml_tensor * token_emb = ggml_get_rows(ctx0, nextn.embed_tokens, inp_token_id);
+            if (!token_emb) {
+                cb(hidden_state_inp, "vllm_mtp_token_emb_failed", layer_idx);
+                if (config.enable_performance_monitoring) {
+                    metrics.fallback_calls++;
+                }
+                return fallback_to_single_token(hidden_state_inp);
+            }
+            
+            // 2. Apply token embedding normalization (enorm)
+            ggml_tensor * token_emb_norm = token_emb;
+            if (nextn.enorm) {
+                token_emb_norm = ggml_rms_norm(ctx0, token_emb, config.rms_norm_eps);
+                if (token_emb_norm) {
+                    token_emb_norm = ggml_mul(ctx0, token_emb_norm, nextn.enorm);
+                    cb(token_emb_norm, "vllm_token_emb_norm", layer_idx);
+                }
+            }
+            
+            // 3. Apply hidden state normalization (hnorm) - vLLM L99 style
+            ggml_tensor * hidden_state_norm = hidden_state_inp;
+            if (nextn.hnorm) {
+                hidden_state_norm = ggml_rms_norm(ctx0, hidden_state_inp, config.rms_norm_eps);
+                if (hidden_state_norm) {
+                    hidden_state_norm = ggml_mul(ctx0, hidden_state_norm, nextn.hnorm);
+                    cb(hidden_state_norm, "vllm_hidden_norm", layer_idx);
+                }
+            }
+            
+            // 4. Concatenate embeddings (torch.cat equivalent)
+            ggml_tensor * combined = ggml_concat(ctx0, token_emb_norm, hidden_state_norm, 0);
+            if (!combined) {
+                cb(hidden_state_inp, "vllm_mtp_concat_failed", layer_idx);
+                if (config.enable_performance_monitoring) {
+                    metrics.fallback_calls++;
+                }
+                return fallback_to_single_token(hidden_state_inp);
+            }
+            cb(combined, "vllm_combined", layer_idx);
+            
+            // 5. Apply eh_proj projection
+            ggml_tensor * projected = ggml_mul_mat(ctx0, nextn.eh_proj, combined);
+            if (!projected) {
+                cb(hidden_state_inp, "vllm_mtp_projection_failed", layer_idx);
+                if (config.enable_performance_monitoring) {
+                    metrics.fallback_calls++;
+                }
+                return fallback_to_single_token(hidden_state_inp);
+            }
+            cb(projected, "vllm_eh_proj", layer_idx);
+            
+            // 6. Apply final shared head for token prediction
+            if (nextn.shared_head_head) {
+                // Optional: Apply shared head normalization first
+                if (nextn.shared_head_norm) {
+                    projected = ggml_rms_norm(ctx0, projected, config.rms_norm_eps);
+                    if (projected) {
+                        projected = ggml_mul(ctx0, projected, nextn.shared_head_norm);
+                        cb(projected, "vllm_shared_norm", layer_idx);
+                    }
+                }
+                
+                // Final projection to vocabulary
+                projected = ggml_mul_mat(ctx0, nextn.shared_head_head, projected);
+                if (projected) {
+                    cb(projected, "vllm_shared_head", layer_idx);
+                    
+                    if (config.enable_performance_monitoring) {
+                        metrics.successful_calls++;
+                        metrics.total_throughput_tokens += 1.0; // Single token prediction
+                    }
+                    
+                    return projected;
+                }
+            }
+            
+            // If we reach here, something failed
+            if (config.enable_performance_monitoring) {
+                metrics.fallback_calls++;
+            }
+            return fallback_to_single_token(hidden_state_inp);
+            
+        } catch (...) {
+            cb(hidden_state_inp, "vllm_mtp_exception", layer_idx);
+            if (config.enable_performance_monitoring) {
+                metrics.fallback_calls++;
+            }
+            return fallback_to_single_token(hidden_state_inp);
+        }
+    }
 };
 
 // Utility functions for MTP configuration
@@ -539,6 +784,7 @@ inline llama_mtp_config llama_mtp_config_default() {
     config.enable_parallel = true;
     config.enable_memory_optimization = true;
     config.enable_tensor_fusion = true;
+    config.enable_performance_monitoring = true;
     config.rms_norm_eps = 1e-6f;
     return config;
 }
@@ -551,6 +797,7 @@ inline llama_mtp_config llama_mtp_config_fast() {
     config.enable_parallel = true;
     config.enable_memory_optimization = true;
     config.enable_tensor_fusion = true;
+    config.enable_performance_monitoring = true;
     config.rms_norm_eps = 1e-6f;
     return config;
 }
@@ -576,6 +823,7 @@ inline llama_mtp_config llama_mtp_config_ultra_fast() {
     config.enable_parallel = true;
     config.enable_memory_optimization = true;
     config.enable_tensor_fusion = true;
+    config.enable_performance_monitoring = true;
     config.rms_norm_eps = 1e-5f;        // Slightly relaxed for speed
     return config;
 }

@@ -151,6 +151,9 @@ struct common_mtp_metrics {
 // 収集された metrics を取得 (nullptr なら空)
 const common_mtp_metrics * common_sampler_get_mtp_metrics(const struct common_sampler * sampler);
 
+// MTP metrics の詳細レポートを出力
+void common_sampler_print_mtp_metrics(const struct common_sampler * sampler);
+
 // MTP 動的調整: 内部で n_predict_tokens を最適化 (戻り値: 現在値)
 int common_sampler_mtp_adapt(struct common_sampler * sampler);
 
