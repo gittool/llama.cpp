@@ -176,7 +176,12 @@ private:
     ) {
         // SPEED OPTIMIZATION: Batch process multiple tokens at once
         const int batch_size = config.n_predict_ahead;
-        const int total_predictions = layer_indices.size() * batch_size;
+        
+        // Track total predictions for performance metrics
+        int total_predictions = 0;
+        if (config.enable_performance_monitoring) {
+            total_predictions = layer_indices.size() * batch_size;
+        }
         
         // Create batched input for parallel processing
         std::vector<ggml_tensor*> layer_outputs;
@@ -197,6 +202,11 @@ private:
                 layer_outputs.push_back(layer_result);
                 current = layer_result;
             }
+        }
+        
+        // Update performance metrics for parallel processing
+        if (config.enable_performance_monitoring && total_predictions > 0) {
+            metrics.total_throughput_tokens += layer_outputs.size() * batch_size;
         }
         
         return current;
@@ -267,6 +277,12 @@ private:
             }
             // Fast division by count
             combined = ggml_scale(ctx0, combined, 1.0f / static_cast<float>(batch_predictions.size()));
+            
+            // Update performance metrics with actual prediction count
+            if (config.enable_performance_monitoring) {
+                metrics.total_throughput_tokens += batch_predictions.size();
+            }
+            
             cb(combined, "mtp_batch_combined", layer_idx);
             return combined;
         }
@@ -639,11 +655,11 @@ private:
         }
         
         printf("=== MTP Performance Report ===\n");
-        printf("Total Calls: %lu\n", metrics.total_calls);
-        printf("Successful: %lu (%.1f%%)\n", metrics.successful_calls, metrics.success_rate() * 100.0);
-        printf("Fallback: %lu (%.1f%%)\n", metrics.fallback_calls, 
+        printf("Total Calls: %llu\n", (unsigned long long)metrics.total_calls);
+        printf("Successful: %llu (%.1f%%)\n", (unsigned long long)metrics.successful_calls, metrics.success_rate() * 100.0);
+        printf("Fallback: %llu (%.1f%%)\n", (unsigned long long)metrics.fallback_calls, 
                metrics.total_calls > 0 ? (double(metrics.fallback_calls) / metrics.total_calls) * 100.0 : 0.0);
-        printf("Validation Failures: %lu (%.1f%%)\n", metrics.validation_failures, 
+        printf("Validation Failures: %llu (%.1f%%)\n", (unsigned long long)metrics.validation_failures, 
                metrics.total_calls > 0 ? (double(metrics.validation_failures) / metrics.total_calls) * 100.0 : 0.0);
         printf("Average Latency: %.2f ms\n", metrics.avg_latency_ms());
         printf("Throughput: %.2f tokens/ms\n", metrics.tokens_per_ms());
@@ -657,7 +673,7 @@ private:
         ggml_context * ctx0,
         ggml_tensor * hidden_state_inp,
         llama_token last_token_id,
-        int n_past,
+        int /* n_past */,  // Parameter reserved for future position-aware processing
         int layer_idx,
         const std::function<void(ggml_tensor *, const char *, int)> & cb
     ) {
