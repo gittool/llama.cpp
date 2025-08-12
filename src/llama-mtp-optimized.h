@@ -234,14 +234,15 @@ private:
             return input; // Skip if dimensions are invalid
         }
         
-        // SPEED OPTIMIZATION: Process batch_size tokens in parallel
+        // SPEED OPTIMIZATION: Use dynamic batch size based on system performance
+        const int optimal_batch_size = std::min(batch_size, get_optimal_batch_size());
         std::vector<ggml_tensor*> batch_predictions;
-        batch_predictions.reserve(batch_size);
+        batch_predictions.reserve(optimal_batch_size);
         
         ggml_tensor * current_input = input;
         
-        // Generate multiple token predictions in batch
-        for (int pred_idx = 0; pred_idx < batch_size; ++pred_idx) {
+        // Generate multiple token predictions in batch with adaptive sizing
+        for (int pred_idx = 0; pred_idx < optimal_batch_size; ++pred_idx) {
             // 1. Embedding projection with caching
             ggml_tensor * projected = apply_projection(ctx0, nextn.eh_proj, current_input, layer_idx, cb);
             if (!projected) break;
@@ -256,7 +257,7 @@ private:
                 batch_predictions.push_back(prediction);
                 
                 // SPEED OPTIMIZATION: Use prediction as input for next iteration (speculative)
-                if (config.enable_speculative && pred_idx < batch_size - 1) {
+                if (config.enable_speculative && pred_idx < optimal_batch_size - 1) {
                     current_input = prediction;
                 }
             } else {
@@ -427,6 +428,14 @@ private:
         const int n_embd = model.hparams.n_embd;
         static thread_local std::unordered_map<void*, ggml_tensor*> weight_cache; // Cache transposed weights
         static thread_local std::unordered_map<void*, bool> prefetch_cache; // Track prefetched data
+        
+        // SPEED OPTIMIZATION: Clear old cache entries to prevent memory bloat
+        static thread_local int cache_cleanup_counter = 0;
+        if (++cache_cleanup_counter > 1000) {
+            weight_cache.clear();
+            prefetch_cache.clear();
+            cache_cleanup_counter = 0;
+        }
         
         ggml_tensor * weight_for_mul = nullptr;
         
@@ -612,28 +621,30 @@ private:
         config.confidence_threshold = threshold;
     }
 
-    // SPEED OPTIMIZATION: Adaptive confidence adjustment based on recent success rate
+    // SPEED OPTIMIZATION: Improved adaptive confidence adjustment for stable performance
     void adapt_confidence_threshold(float recent_success_rate) {
-        if (recent_success_rate > 0.9f) {
-            // Very high success rate - be more aggressive
-            config.confidence_threshold = std::max(0.1f, config.confidence_threshold * 0.9f);
-        } else if (recent_success_rate < 0.5f) {
+        if (recent_success_rate > 0.85f) {
+            // High success rate - be slightly more aggressive
+            config.confidence_threshold = std::max(0.3f, config.confidence_threshold * 0.95f);
+        } else if (recent_success_rate < 0.6f) {
             // Low success rate - be more conservative
-            config.confidence_threshold = std::min(0.8f, config.confidence_threshold * 1.1f);
+            config.confidence_threshold = std::min(0.9f, config.confidence_threshold * 1.05f);
         }
-        // Keep threshold within reasonable bounds for maximum speed
-        config.confidence_threshold = std::max(0.1f, std::min(0.8f, config.confidence_threshold));
+        // Keep threshold within reasonable bounds for stable performance
+        config.confidence_threshold = std::max(0.3f, std::min(0.9f, config.confidence_threshold));
     }
 
-    // Get optimized batch size based on current configuration
+    // Get optimized batch size based on current configuration and system capabilities
     int get_optimal_batch_size() const {
-        // Dynamic batch sizing based on confidence threshold
+        // Improved dynamic batch sizing for better cache performance
         if (config.confidence_threshold <= 0.2f) {
-            return config.n_predict_ahead; // Use full batch for hyper-aggressive mode
-        } else if (config.confidence_threshold <= 0.4f) {
-            return std::max(16, config.n_predict_ahead / 2); // Use half batch for moderate confidence
+            return std::min(config.n_predict_ahead, 8); // Cap at 8 for better cache locality
+        } else if (config.confidence_threshold <= 0.5f) {
+            return std::min(6, config.n_predict_ahead); // Moderate batch size
+        } else if (config.confidence_threshold <= 0.7f) {
+            return std::min(4, config.n_predict_ahead); // Conservative for better quality
         } else {
-            return std::max(8, config.n_predict_ahead / 4); // Conservative batch size
+            return std::min(2, config.n_predict_ahead); // Very conservative for high quality
         }
     }
 
@@ -794,21 +805,21 @@ private:
 // Utility functions for MTP configuration
 inline llama_mtp_config llama_mtp_config_default() {
     llama_mtp_config config;
-    config.n_predict_ahead = 4;
-    config.confidence_threshold = 0.7f;
+    config.n_predict_ahead = 4;            // Balanced for cache performance
+    config.confidence_threshold = 0.75f;   // Higher quality threshold
     config.enable_speculative = true;
     config.enable_parallel = true;
     config.enable_memory_optimization = true;
     config.enable_tensor_fusion = true;
     config.enable_performance_monitoring = true;
-    config.rms_norm_eps = 1e-6f;
+    config.rms_norm_eps = 1e-6f;           // Higher precision
     return config;
 }
 
 inline llama_mtp_config llama_mtp_config_fast() {
     llama_mtp_config config;
-    config.n_predict_ahead = 8;
-    config.confidence_threshold = 0.6f;
+    config.n_predict_ahead = 6;            // Reduced from 8 for better cache performance
+    config.confidence_threshold = 0.65f;   // Slightly increased for better quality
     config.enable_speculative = true;
     config.enable_parallel = true;
     config.enable_memory_optimization = true;

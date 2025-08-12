@@ -13766,9 +13766,15 @@ struct llm_build_glm4 : public llm_graph_context {
         // Phase 2: NextN/MTP layers for multi-token prediction using optimized processor
         ggml_tensor * mtp_output = inpL; // Default to transformer output
         if (hparams.nextn_predict_layers > 0) {
-            // Use optimized MTP processor for better performance
-            
-            auto mtp_config = llama_mtp_config_fast(); // Use fast config for better performance
+            // Optimized MTP config for balanced speed and quality
+            auto mtp_config = llama_mtp_config_default();
+            // Optimize parameters for better speed/quality balance
+            mtp_config.n_predict_ahead = 4;          // Reduced from 8 to 4 for better cache locality
+            mtp_config.confidence_threshold = 0.75f; // Increased for better quality control
+            mtp_config.enable_speculative = true;
+            mtp_config.enable_parallel = true;
+            mtp_config.enable_memory_optimization = true;
+            mtp_config.rms_norm_eps = 1e-6f;         // Higher precision for better quality
             llama_mtp_processor mtp_proc(model, mtp_config);
             
             // Collect MTP layer indices
@@ -14037,8 +14043,15 @@ struct llm_build_glm4_moe : public llm_graph_context {
         // Phase 2: NextN/MTP layers for multi-token prediction using optimized processor
         ggml_tensor * mtp_output = inpL; // Default to transformer output
         if (hparams.nextn_predict_layers > 0) {
-            // Use optimized MTP processor for better performance
-            auto mtp_config = llama_mtp_config_fast(); // Use fast config for better performance
+            // Optimized MTP config for balanced speed and quality (GLM4_MOE)
+            auto mtp_config = llama_mtp_config_default();
+            // Optimize parameters for better speed/quality balance
+            mtp_config.n_predict_ahead = 4;          // Reduced from 8 to 4 for better cache locality
+            mtp_config.confidence_threshold = 0.75f; // Increased for better quality control
+            mtp_config.enable_speculative = true;
+            mtp_config.enable_parallel = true;
+            mtp_config.enable_memory_optimization = true;
+            mtp_config.rms_norm_eps = 1e-6f;         // Higher precision for better quality
             llama_mtp_processor mtp_proc(model, mtp_config);
             
             // Collect MTP layer indices  
