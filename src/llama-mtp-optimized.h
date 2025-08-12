@@ -427,10 +427,17 @@ private:
         if (!proj_weight || !input) return nullptr;
         
         const int n_embd = model.hparams.n_embd;
-        // Fix: Use safer key type and improved cache management
+        // Fix: Use safer key type and improved cache management with custom hash
         using cache_key_t = std::pair<uintptr_t, size_t>; // (address, size) for better safety
-        static thread_local std::unordered_map<cache_key_t, ggml_tensor*, std::hash<std::pair<uintptr_t, size_t>>> weight_cache;
-        static thread_local std::unordered_map<cache_key_t, bool, std::hash<std::pair<uintptr_t, size_t>>> prefetch_cache;
+        
+        struct cache_key_hash {
+            std::size_t operator()(const cache_key_t& k) const {
+                return std::hash<uintptr_t>()(k.first) ^ (std::hash<size_t>()(k.second) << 1);
+            }
+        };
+        
+        static thread_local std::unordered_map<cache_key_t, ggml_tensor*, cache_key_hash> weight_cache;
+        static thread_local std::unordered_map<cache_key_t, bool, cache_key_hash> prefetch_cache;
         
         // SPEED OPTIMIZATION: Improved cache management - only clear when size exceeds threshold
         static thread_local int cache_cleanup_counter = 0;
