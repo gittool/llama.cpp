@@ -10,6 +10,7 @@
 #include "llama-kv-cache-unified-iswa.h"
 #include "llama-mtp-optimized.h"  // For optimized MTP processing
 #include "llama-mtp-enhanced.h"   // For enhanced vLLM-style MTP processing
+#include "llama-mtp-stable.h"     // For stable MTP configurations
 #include "llama-memory-hybrid.h"
 #include "llama-memory-recurrent.h"
 
@@ -13778,7 +13779,9 @@ struct llm_build_glm4 : public llm_graph_context {
             
             // Fallback to original optimized MTP if enhanced fails
             if (!mtp_output || mtp_output == inpL) {
-                auto mtp_config = llama_mtp_config_fast();
+                // 安定性重視の設定を使用
+                auto mtp_config = llama_mtp_config_stable();
+                mtp_config = llama_mtp_validation::sanitize_config(mtp_config);
                 llama_mtp_processor mtp_proc(model, mtp_config);
                 
                 // Collect MTP layer indices
@@ -14056,7 +14059,9 @@ struct llm_build_glm4_moe : public llm_graph_context {
             
             // Fallback to original optimized MTP if enhanced fails
             if (!mtp_output || mtp_output == inpL) {
-                auto mtp_config = llama_mtp_config_fast();
+                // 安定性重視の設定を使用
+                auto mtp_config = llama_mtp_config_stable();
+                mtp_config = llama_mtp_validation::sanitize_config(mtp_config);
                 llama_mtp_processor mtp_proc(model, mtp_config);
                 
                 // Collect MTP layer indices

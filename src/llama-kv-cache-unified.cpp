@@ -43,7 +43,7 @@ llama_kv_cache_unified::llama_kv_cache_unified(
     // MTP (Multi-Token Prediction) layers require KV cache for speculative decoding
     if (model.hparams.nextn_predict_layers > 0) {
         // MTP models need cache for both transformer and prediction layers
-        n_layer = model.hparams.n_layer; // Include all layers for MTP processing
+        n_layer_cache = model.hparams.n_layer; // Include all layers for MTP processing
     }
     // The NextN/MTP layers are part of the model architecture and should be processed
 

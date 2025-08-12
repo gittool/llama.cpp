@@ -5,6 +5,8 @@
 
 #include "llama-model.h"
 #include "llama-mtp-optimized.h"
+#include "llama-mtp-stable.h"
+#include "llama-mtp-manager.h"
 
 // 既存のMTP実装を拡張するクラス
 class llama_mtp_enhanced_processor {
@@ -234,9 +236,11 @@ inline ggml_tensor * process_mtp_with_enhancements(
         return base_processor.process_mtp_layers(ctx0, input_tensor, mtp_layers, cb);
     }
 
-    // Enhanced MTP処理
-    llama_mtp_config enhanced_config = llama_mtp_config_fast();
-    enhanced_config.enable_speculative = true;
+    // Enhanced MTP処理 - 最適化された設定を動的に取得
+    llama_mtp_config enhanced_config = LLAMA_MTP_AUTO_CONFIG();
+    
+    // 安全性のためのパラメータ検証と調整
+    enhanced_config = llama_mtp_validation::sanitize_config(enhanced_config);
     enhanced_config.enable_performance_monitoring = true;
     
     llama_mtp_enhanced_processor enhanced_processor(model, enhanced_config);
