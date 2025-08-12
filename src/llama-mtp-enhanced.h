@@ -196,7 +196,7 @@ public:
         
         // 少なくとも1つのMTPレイヤーがenhanced機能を持つかチェック
         const int n_transformer_layers = model.hparams.n_layer - model.hparams.nextn_predict_layers;
-        for (int il = n_transformer_layers; il < model.hparams.n_layer; ++il) {
+        for (int il = n_transformer_layers; il < static_cast<int>(model.hparams.n_layer); ++il) {
             const auto & nextn = model.layers[il].nextn;
             if (nextn.embed_tokens && nextn.eh_proj && nextn.shared_head_head) {
                 return true;
@@ -227,7 +227,7 @@ inline ggml_tensor * process_mtp_with_enhancements(
         // MTPレイヤーのインデックスを収集
         std::vector<int> mtp_layers;
         const int n_transformer_layers = model.hparams.n_layer - model.hparams.nextn_predict_layers;
-        for (int il = n_transformer_layers; il < model.hparams.n_layer; ++il) {
+        for (int il = n_transformer_layers; il < static_cast<int>(model.hparams.n_layer); ++il) {
             if (model.layers[il].nextn.eh_proj && model.layers[il].nextn.shared_head_head) {
                 mtp_layers.push_back(il);
             }

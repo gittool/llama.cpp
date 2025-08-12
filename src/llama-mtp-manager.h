@@ -164,7 +164,7 @@ private:
         
         status.avg_success_rate = total_success_rate / recent_records.size();
         status.avg_latency_ms = total_latency / recent_records.size();
-        status.requires_fallback = (fallback_count > recent_records.size() / 2);
+        status.requires_fallback = (static_cast<size_t>(fallback_count) > recent_records.size() / 2);
         
         // レイテンシの分散を計算
         double latency_variance = 0.0;
