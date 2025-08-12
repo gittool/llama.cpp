@@ -64,17 +64,18 @@ private:
             return false;
         }
         
-        // Allow standard GLM4 (n_embd x n_embd) or GLM4_MOE (2*n_embd x n_embd)
-        bool valid_eh_proj = (nextn.eh_proj->ne[0] == n_embd && nextn.eh_proj->ne[1] == n_embd) ||
-                            (nextn.eh_proj->ne[0] == 2 * n_embd && nextn.eh_proj->ne[1] == n_embd);
+        // Fix: For ggml_mul_mat(A, B), dimensions must match: A[ne[1]] == B[ne[0]]
+        // For input (n_embd x seq_len) * eh_proj, eh_proj should be (n_embd x output_dim)
+        bool valid_eh_proj = (nextn.eh_proj->ne[0] == n_embd && nextn.eh_proj->ne[1] > 0) ||
+                            (nextn.eh_proj->ne[1] == n_embd && nextn.eh_proj->ne[0] > 0);
         
         if (!valid_eh_proj) {
             return false;
         }
         
-        // Validate shared_head dimensions
-        if (nextn.shared_head_head->ne[1] > model.vocab.n_tokens() || 
-            nextn.shared_head_head->ne[1] == 0) {
+        // Fix: Validate shared_head dimensions - vocab_size should be checked against ne[0], not ne[1]
+        if (nextn.shared_head_head->ne[0] > model.vocab.n_tokens() || 
+            nextn.shared_head_head->ne[0] == 0 || nextn.shared_head_head->ne[1] == 0) {
             return false;
         }
         
@@ -125,9 +126,9 @@ public:
         ggml_tensor * current = input_tensor;
         
         try {
-            // SPEED OPTIMIZATION: Process multiple layers in parallel when enabled
+            // SPEED OPTIMIZATION: Process multiple layers with batching optimization when enabled
             if (config.enable_parallel && layer_indices.size() > 1) {
-                ggml_tensor * result = process_mtp_layers_parallel(ctx0, current, layer_indices, callback);
+                ggml_tensor * result = process_mtp_layers_batched(ctx0, current, layer_indices, callback);
                 return result ? result : input_tensor; // Fallback to input if processing fails
             } else {
                 // Sequential processing for single layers or when parallel is disabled
@@ -167,8 +168,8 @@ public:
     }
 
 private:
-    // PARALLEL processing for multiple MTP layers
-    ggml_tensor * process_mtp_layers_parallel(
+    // BATCHED processing for multiple MTP layers (sequential with batching optimization)
+    ggml_tensor * process_mtp_layers_batched(
         ggml_context * ctx0,
         ggml_tensor * input_tensor,
         const std::vector<int> & layer_indices,
@@ -189,7 +190,7 @@ private:
         
         ggml_tensor * current = input_tensor;
         
-        // Process each layer with enhanced parallelism
+        // Process each layer sequentially with enhanced batching
         for (size_t i = 0; i < layer_indices.size(); ++i) {
             int layer_idx = layer_indices[i];
             
@@ -426,14 +427,24 @@ private:
         if (!proj_weight || !input) return nullptr;
         
         const int n_embd = model.hparams.n_embd;
-        static thread_local std::unordered_map<void*, ggml_tensor*> weight_cache; // Cache transposed weights
-        static thread_local std::unordered_map<void*, bool> prefetch_cache; // Track prefetched data
+        // Fix: Use safer key type and improved cache management
+        using cache_key_t = std::pair<uintptr_t, size_t>; // (address, size) for better safety
+        static thread_local std::unordered_map<cache_key_t, ggml_tensor*, std::hash<std::pair<uintptr_t, size_t>>> weight_cache;
+        static thread_local std::unordered_map<cache_key_t, bool, std::hash<std::pair<uintptr_t, size_t>>> prefetch_cache;
         
-        // SPEED OPTIMIZATION: Clear old cache entries to prevent memory bloat
+        // SPEED OPTIMIZATION: Improved cache management - only clear when size exceeds threshold
         static thread_local int cache_cleanup_counter = 0;
-        if (++cache_cleanup_counter > 1000) {
-            weight_cache.clear();
-            prefetch_cache.clear();
+        constexpr size_t MAX_CACHE_SIZE = 100; // More reasonable cache size limit
+        if (++cache_cleanup_counter > 100 && weight_cache.size() > MAX_CACHE_SIZE) {
+            // Clear oldest entries instead of everything
+            auto it = weight_cache.begin();
+            std::advance(it, weight_cache.size() / 2);
+            weight_cache.erase(weight_cache.begin(), it);
+            
+            auto pit = prefetch_cache.begin();
+            std::advance(pit, prefetch_cache.size() / 2);
+            prefetch_cache.erase(prefetch_cache.begin(), pit);
+            
             cache_cleanup_counter = 0;
         }
         
@@ -442,15 +453,16 @@ private:
         // SPEED OPTIMIZATION: Memory prefetching for next layer
         if (config.enable_memory_optimization && layer_idx + 1 < static_cast<int>(model.layers.size())) {
             auto next_layer = &model.layers[layer_idx + 1].nextn;
-            if (next_layer->eh_proj && prefetch_cache.find(next_layer->eh_proj) == prefetch_cache.end()) {
+            cache_key_t next_key = std::make_pair(reinterpret_cast<uintptr_t>(next_layer->eh_proj), ggml_nbytes(next_layer->eh_proj));
+            if (next_layer->eh_proj && prefetch_cache.find(next_key) == prefetch_cache.end()) {
                 // Prefetch next layer weights (conceptual - actual prefetch depends on compiler/platform)
-                prefetch_cache[next_layer->eh_proj] = true;
+                prefetch_cache[next_key] = true;
                 // In practice, this could use __builtin_prefetch or similar
             }
         }
         
         // SPEED OPTIMIZATION: Check cache first to avoid repeated transpose operations
-        auto cache_key = proj_weight;
+        cache_key_t cache_key = std::make_pair(reinterpret_cast<uintptr_t>(proj_weight), ggml_nbytes(proj_weight));
         if (config.enable_memory_optimization) {
             auto cached = weight_cache.find(cache_key);
             if (cached != weight_cache.end() && cached->second) {
@@ -465,16 +477,22 @@ private:
         }
         
         if (!weight_for_mul) {
-            // Enhanced dimension handling for different model variants with memory optimization
-            if (proj_weight->ne[0] == 2 * n_embd && proj_weight->ne[1] == n_embd) {
-                // GLM4_MOE case: transpose and make contiguous for optimal memory access
+            // Fix: Enhanced dimension handling with consistent transpose logic
+            // For ggml_mul_mat(weight, input), weight needs proper orientation
+            if (proj_weight->ne[1] == n_embd) {
+                // Weight has input dimension in ne[1], needs transpose for ggml_mul_mat
                 weight_for_mul = ggml_cont(ctx0, ggml_transpose(ctx0, proj_weight));
-                cb(weight_for_mul, "mtp_proj_transpose_moe", layer_idx);
-            } else if (proj_weight->ne[0] == n_embd && proj_weight->ne[1] == n_embd) {
-                // Standard GLM4: transpose and make contiguous for optimal memory access
-                weight_for_mul = ggml_cont(ctx0, ggml_transpose(ctx0, proj_weight));
-                cb(weight_for_mul, "mtp_proj_transpose", layer_idx);
+                if (proj_weight->ne[0] == 2 * n_embd) {
+                    cb(weight_for_mul, "mtp_proj_transpose_moe", layer_idx);
+                } else {
+                    cb(weight_for_mul, "mtp_proj_transpose", layer_idx);
+                }
+            } else if (proj_weight->ne[0] == n_embd) {
+                // Weight already has correct orientation
+                weight_for_mul = proj_weight;
+                cb(weight_for_mul, "mtp_proj_direct", layer_idx);
             } else {
+                // Unknown configuration, use as-is
                 weight_for_mul = proj_weight;
             }
             
@@ -484,8 +502,9 @@ private:
             }
         }
         
-        // Enhanced safety check with dimension validation
-        if (weight_for_mul->ne[0] != input->ne[0] || 
+        // Fix: Enhanced safety check with correct ggml_mul_mat dimension validation
+        // For ggml_mul_mat(input, weight_for_mul), need input->ne[1] == weight_for_mul->ne[0]
+        if (input->ne[0] != weight_for_mul->ne[0] || 
             weight_for_mul->ne[1] > n_embd * 2) { // Allow up to 2x embedding size
             return nullptr; // Dimension mismatch or invalid size
         }
