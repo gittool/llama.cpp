@@ -248,7 +248,7 @@ inline ggml_tensor * process_mtp_with_enhancements(
     // MTPレイヤーのインデックスを収集
     std::vector<int> mtp_layers;
     const int n_transformer_layers = model.hparams.n_layer - model.hparams.nextn_predict_layers;
-    for (int il = n_transformer_layers; il < model.hparams.n_layer; ++il) {
+    for (int il = n_transformer_layers; il < static_cast<int>(model.hparams.n_layer); ++il) {
         mtp_layers.push_back(il);
     }
     
