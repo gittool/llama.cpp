@@ -3142,7 +3142,8 @@ int32_t llama_accept_predicted_tokens(struct llama_context * ctx, int32_t idx, i
         }
     }
     
-    // NOTE: 実際のKV更新は呼び出し側で適切に処理される
+    // NOTE: KVキャッシュの更新はここでは行わない
+    // 実際のKV更新は通常のdecode処理で行われる
     
     return accepted_count;
 }
@@ -3162,8 +3163,9 @@ bool llama_context_can_speculative_mtp(const struct llama_context * ctx) {
     // TODO: モデルの能力をより詳細にチェックする
     // 現在は基本的な条件のみをチェック
     
-    // 簡易実装では、基本的な条件が満たされれば有効とする
-    return true;
+    // FIXME: KVキャッシュ位置管理の問題を回避するため、一時的に無効化
+    // 真のspeculative decodingには中間hidden/KV stateの適切な管理が必要
+    return false;
 }
 
 // Speculative verification implementation:

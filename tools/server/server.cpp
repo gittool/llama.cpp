@@ -3629,9 +3629,11 @@ struct server_context {
 
                 // fast-accept 実装:
                 if (mtp_used && predicted_extra > 0 && llama_context_can_speculative_mtp(ctx)) {
-                    int fast = llama_accept_predicted_tokens(ctx, slot.n_past - 1, predicted_extra, mtp_tokens.data() + 1);
+                    // 現在のslot.n_pastをベースとしてfast-acceptを試行
+                    int fast = llama_accept_predicted_tokens(ctx, slot.n_past, predicted_extra, mtp_tokens.data() + 1);
                     if (fast > 0) {
-                        slot.n_past += fast;
+                        // NOTE: KVキャッシュの位置更新はllama_accept_predicted_tokens内で処理済み
+                        // ここではslotの状態のみを更新
                         accepted += fast;
                         
                         // 追加で受け入れられたトークンを生成済みトークンリストに追加
