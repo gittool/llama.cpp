@@ -1,5 +1,4 @@
 // MTP (Multi-Token Prediction) Forward Pass Implementation
-// このファイルはGLM4のMTPレイヤーを実際に使用するための実装提案です
 
 #pragma once
 #include "llama-model.h"

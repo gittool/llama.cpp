@@ -115,8 +115,8 @@ void common_sampler_init_mtp(struct common_sampler * sampler, int n_predict_toke
 
 // Sample multiple tokens using MTP (Multi-Token Prediction)
 // acceptance_threshold:
-//   - 通常: 0.0-1.0 の確率しきい値
-//   - margin モード有効時 (mtp_use_margin=true): 無視され内部で負値に変換され logit margin 閾値として扱われる
+//   - Normally: probability threshold between 0.0-1.0
+//   - When margin mode is enabled (mtp_use_margin=true): ignored and internally converted to a negative value, treated as a logit margin threshold
 std::vector<llama_token> common_sampler_sample_mtp(
         struct common_sampler * sampler,
         struct llama_context * ctx,
@@ -124,10 +124,10 @@ std::vector<llama_token> common_sampler_sample_mtp(
         int n_predict_tokens,
         float acceptance_threshold);
 
-// Sample & 受理 (accept) まで行うユーティリティ
-//  - 先頭トークン: 通常サンプリングチェーン + (必要なら) grammar
-//  - 2個目以降: MTP 予測 (grammar が有効な場合は安全のため停止)
-// 返り値: 実際に accept 済みのトークン列 (少なくとも1個)
+// Utility to sample and accept tokens
+//  - First token: Uses the normal sampling chain + grammar (if necessary)
+//  - Subsequent tokens: Use MTP prediction (disabled for safety if grammar is active)
+// Returns: A sequence of actually accepted tokens (at least one)
 std::vector<llama_token> common_sampler_sample_and_accept_mtp(
         struct common_sampler * sampler,
         struct llama_context * ctx,
@@ -136,11 +136,10 @@ std::vector<llama_token> common_sampler_sample_and_accept_mtp(
         float acceptance_threshold,
         bool  grammar_first = false);
 
-// Check if MTP should be enabled based on model architecture
-// サンプラパラメータ (enabled / grammar 無効 等) も考慮した包括的判定
+// Check if MTP can be used, considering both sampler parameters (enabled, grammar disabled, etc.) and model capabilities
 bool common_sampler_can_use_mtp(struct common_sampler * sampler, struct llama_context * ctx);
 
-// MTP runtime metrics (軽量集計)
+// MTP runtime metrics (lightweight aggregation)
 struct common_mtp_metrics {
         uint64_t calls              = 0;   // number of MTP attempts
         uint64_t tokens_first_only  = 0;   // only first token produced (fallback)
@@ -148,14 +147,14 @@ struct common_mtp_metrics {
         double   ema_accept_len     = 1.0; // EMA of accepted tokens per forward
 };
 
-// 収集された metrics を取得 (nullptr なら空)
+// Get the collected metrics (returns nullptr if empty)
 const common_mtp_metrics * common_sampler_get_mtp_metrics(const struct common_sampler * sampler);
 
-// MTP metrics の詳細レポートを出力
+// Print a detailed report of MTP metrics
 void common_sampler_print_mtp_metrics(const struct common_sampler * sampler);
 
-// MTP 動的調整: 内部で n_predict_tokens を最適化 (戻り値: 現在値)
+// Dynamically adjust MTP: optimizes n_predict_tokens internally (returns the current value)
 int common_sampler_mtp_adapt(struct common_sampler * sampler);
 
-// 既存互換: 古い呼び出し箇所向け (将来削除予定)
+// Compatibility for older calls (to be removed in the future)
 inline bool common_sampler_can_use_mtp(struct llama_context * ctx) { return common_sampler_can_use_mtp(nullptr, ctx); }

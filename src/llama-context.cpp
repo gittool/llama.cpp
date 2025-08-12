@@ -2986,14 +2986,12 @@ int32_t llama_predict_mtp_tokens(
     if (!llama_context_can_use_mtp(ctx)) {
         return 0;
     }
-    
-    // Use enhanced MTP processor if available
-    if (ctx->mtp_processor && ctx->mtp_processor->is_available()) {
-        // TODO: Implement enhanced MTP prediction using the new processor
-        // This would require creating appropriate input tensors from the current context
-        // For now, fall back to the original implementation
-    }
-    
+
+    // Note: The enhanced MTP processor (`llama_mtp_forward_processor`) is not called here.
+    // This function provides the original, basic MTP implementation.
+    // The higher-level samplers in `common/sampling.cpp` are responsible for deciding
+    // whether to use the enhanced processor or fall back to this basic implementation.
+
     // Get logits for the specified token position
     const float * logits = llama_get_logits_ith(ctx, idx);
     if (!logits) {
