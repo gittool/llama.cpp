@@ -185,8 +185,6 @@ public:
             
             // Compute QKV
             ggml_tensor * qkv = ggml_mul_mat(ctx, weights.wqkv, attn_input);
-            
-            (void)n_embd;  // Suppress unused variable warning
             const int64_t n_tokens = qkv->ne[1];
             const int32_t n_head = hparams.n_head(hparams.n_embd);
             const int32_t n_head_kv = hparams.n_head_kv(hparams.n_embd);
@@ -273,7 +271,7 @@ public:
         step_context.mtp_start_layer = hparams.n_layer;
         
         // Initialize MTP layers
-        for (int i = 0; i < hparams.nextn_predict_layers; ++i) {
+        for (uint32_t i = 0; i < hparams.nextn_predict_layers; ++i) {
             mtp_layers.push_back(std::make_unique<llama_mtp_layer_optimized>(hparams));
         }
     }

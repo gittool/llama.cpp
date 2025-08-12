@@ -1394,6 +1394,15 @@ extern "C" {
         // Check if speculative MTP fast-accept path is currently supported (false in stub stage).
         LLAMA_API bool llama_context_can_speculative_mtp(const struct llama_context * ctx);
 
+        // Generate draft tokens using MTP with intermediate hidden/KV states
+        LLAMA_API int32_t llama_generate_draft_tokens(struct llama_context * ctx, int32_t n_predict, llama_token * draft_tokens, float * hidden_states);
+
+        // Verify draft tokens against target model with batched verification
+        LLAMA_API int32_t llama_verify_draft_tokens(struct llama_context * ctx, int32_t n_draft, const llama_token * draft_tokens, const float * draft_hidden);
+
+        // Main speculative decoding function
+        LLAMA_API int32_t llama_speculative_decode(struct llama_context * ctx, int32_t n_predict, llama_token * output_tokens);
+
     //
     // Model info API
     //

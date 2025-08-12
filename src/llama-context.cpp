@@ -3111,9 +3111,9 @@ int32_t llama_accept_predicted_tokens(struct llama_context * ctx, int32_t idx, i
         return 0;
     }
     
-    // 現在のKVキャッシュの状態を確認
-    const int32_t n_past = ctx->kv_self.head;
-    if (idx < 0 || idx >= n_past) {
+    // 現在のコンテキストのサイズを確認
+    const uint32_t n_ctx = ctx->n_ctx();
+    if (idx < 0 || (uint32_t)idx >= n_ctx) {
         return 0;
     }
     
@@ -3125,17 +3125,14 @@ int32_t llama_accept_predicted_tokens(struct llama_context * ctx, int32_t idx, i
             break;
         }
         
-        // KVキャッシュに余裕があるかチェック
-        if (n_past + accepted_count + 1 >= ctx->kv_self.size) {
+        // コンテキストに余裕があるかチェック
+        if ((uint32_t)(idx + accepted_count + 1) >= n_ctx) {
             break;
         }
         
         // TODO: 将来的にはここで中間 hidden/KV state を使った検証を行う
         // 現在は簡単な受け入れ判定のみ実装
         
-        // 予測トークンをKVキャッシュに追加（簡易実装）
-        // NOTE: 実際のKV更新は llama_decode 呼び出しで行われるが、
-        // ここでは position を進めて次のトークン位置を準備
         accepted_count++;
         
         // 連続する予測が信頼できそうかの簡易判定
@@ -3145,10 +3142,7 @@ int32_t llama_accept_predicted_tokens(struct llama_context * ctx, int32_t idx, i
         }
     }
     
-    // 受け入れたトークン数分だけKVヘッドを進める
-    if (accepted_count > 0) {
-        ctx->kv_self.head += accepted_count;
-    }
+    // NOTE: 実際のKV更新は呼び出し側で適切に処理される
     
     return accepted_count;
 }
@@ -3158,8 +3152,9 @@ bool llama_context_can_speculative_mtp(const struct llama_context * ctx) {
         return false;
     }
     
-    // KVキャッシュが利用可能で、十分な容量があるかチェック
-    if (ctx->kv_self.size <= 0 || ctx->kv_self.head >= ctx->kv_self.size - 1) {
+    // コンテキストサイズが有効かチェック
+    const uint32_t n_ctx = ctx->n_ctx();
+    if (n_ctx <= 1) {
         return false;
     }
     
@@ -3187,6 +3182,9 @@ int32_t llama_generate_draft_tokens(struct llama_context * ctx, int32_t n_predic
         return 0;
     }
     
+    // 未使用パラメータの警告を抑制
+    (void)hidden_states;
+    
     // MTPを使用してdraft tokensを生成
     // TODO: NextN層から中間埋め込みを取得する実装
     // 現在は基本的なdraft生成のプレースホルダー
@@ -3209,6 +3207,9 @@ int32_t llama_verify_draft_tokens(struct llama_context * ctx, int32_t n_draft, c
     if (!ctx || n_draft <= 0 || !draft_tokens) {
         return 0;
     }
+    
+    // 未使用パラメータの警告を抑制
+    (void)draft_hidden;
     
     // Target modelで1回のforwardを実行してdraft tokensを検証
     // この実装により複数stepのllama_decodeをスキップ可能
