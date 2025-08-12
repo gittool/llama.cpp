@@ -13879,9 +13879,20 @@ struct llm_build_glm4 : public llm_graph_context {
                     // NextN tensors not available, skip this layer  
                     cb(mtp_output, "nextn_skip", il);
                 }
-            }
             } // End manual fallback processing
         }
+
+        cur = mtp_output;
+        
+        cur = build_norm(cur, model.output_norm, NULL, LLM_NORM_RMS, -1);
+        cb(cur, "result_norm", -1);
+        res->t_embd = cur;
+
+        cur = build_lora_mm(model.output, cur);
+        cb(cur, "result_output", -1);
+        res->t_logits = cur;
+
+        ggml_build_forward_expand(gf, cur);
     }
 };
 
@@ -14130,9 +14141,20 @@ struct llm_build_glm4_moe : public llm_graph_context {
                     // NextN tensors not available, skip this layer  
                     cb(mtp_output, "nextn_skip", il);
                 }
-            }
             } // End manual fallback processing
         }
+
+        cur = mtp_output;
+        
+        cur = build_norm(cur, model.output_norm, NULL, LLM_NORM_RMS, -1);
+        cb(cur, "result_norm", -1);
+        res->t_embd = cur;
+
+        cur = build_lora_mm(model.output, cur);
+        cb(cur, "result_output", -1);
+        res->t_logits = cur;
+
+        ggml_build_forward_expand(gf, cur);
     }
 };
 
