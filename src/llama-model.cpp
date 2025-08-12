@@ -9,6 +9,7 @@
 #include "llama-kv-cache-unified.h"
 #include "llama-kv-cache-unified-iswa.h"
 #include "llama-mtp-optimized.h"  // For optimized MTP processing
+#include "llama-mtp-enhanced.h"   // For enhanced vLLM-style MTP processing
 #include "llama-memory-hybrid.h"
 #include "llama-memory-recurrent.h"
 
@@ -13763,32 +13764,39 @@ struct llm_build_glm4 : public llm_graph_context {
             cb(inpL, "l_out", il);
         }
 
-        // Phase 2: NextN/MTP layers for multi-token prediction using optimized processor
+        // Phase 2: Enhanced NextN/MTP layers with vLLM-style processing
         ggml_tensor * mtp_output = inpL; // Default to transformer output
         if (hparams.nextn_predict_layers > 0) {
-            // Use optimized MTP processor for better performance
+            // Create callback wrapper for enhanced processing
+            auto cb_wrapper = [this](ggml_tensor * tensor, const char * name, int layer) {
+                this->cb(tensor, name, layer);
+            };
             
-            auto mtp_config = llama_mtp_config_fast(); // Use fast config for better performance
-            llama_mtp_processor mtp_proc(model, mtp_config);
+            // Try enhanced MTP processing with token embedding support
+            llama_token last_token_id = 0; // TODO: Extract from inference context
+            mtp_output = LLAMA_MTP_ENHANCED_PROCESS(model, ctx0, inpL, last_token_id, cb_wrapper);
             
-            // Collect MTP layer indices
-            std::vector<int> mtp_layers;
-            for (int il = n_transformer_layers; il < n_layer; ++il) {
-                if (model.layers[il].nextn.eh_proj && model.layers[il].nextn.shared_head_head) {
-                    mtp_layers.push_back(il);
+            // Fallback to original optimized MTP if enhanced fails
+            if (!mtp_output || mtp_output == inpL) {
+                auto mtp_config = llama_mtp_config_fast();
+                llama_mtp_processor mtp_proc(model, mtp_config);
+                
+                // Collect MTP layer indices
+                std::vector<int> mtp_layers;
+                for (int il = n_transformer_layers; il < n_layer; ++il) {
+                    if (model.layers[il].nextn.eh_proj && model.layers[il].nextn.shared_head_head) {
+                        mtp_layers.push_back(il);
+                    }
+                }
+                
+                if (!mtp_layers.empty()) {
+                    mtp_output = mtp_proc.process_mtp_layers(ctx0, inpL, mtp_layers, cb_wrapper);
                 }
             }
             
-            // Process all MTP layers efficiently with parallel token prediction
-            if (!mtp_layers.empty()) {
-                // Create a callback wrapper to match the expected signature
-                auto cb_wrapper = [this](ggml_tensor * tensor, const char * name, int layer) {
-                    this->cb(tensor, name, layer);
-                };
-                mtp_output = mtp_proc.process_mtp_layers(ctx0, inpL, mtp_layers, cb_wrapper);
-                if (!mtp_output) mtp_output = inpL; // Fallback to input
-                cb(mtp_output, "mtp_final_output", -1);
-            }
+            if (!mtp_output) mtp_output = inpL; // Final fallback to input
+            cb(mtp_output, "mtp_enhanced_final_output", -1);
+        }
             
             // Manual fallback processing (kept for compatibility testing)
             if (false) { // Disable manual processing - remove after verification
@@ -14034,31 +14042,39 @@ struct llm_build_glm4_moe : public llm_graph_context {
             inpL = cur;
         }
 
-        // Phase 2: NextN/MTP layers for multi-token prediction using optimized processor
+        // Phase 2: Enhanced NextN/MTP layers with vLLM-style processing (MoE version)
         ggml_tensor * mtp_output = inpL; // Default to transformer output
         if (hparams.nextn_predict_layers > 0) {
-            // Use optimized MTP processor for better performance
-            auto mtp_config = llama_mtp_config_fast(); // Use fast config for better performance
-            llama_mtp_processor mtp_proc(model, mtp_config);
+            // Create callback wrapper for enhanced processing
+            auto cb_wrapper = [this](ggml_tensor * tensor, const char * name, int layer) {
+                this->cb(tensor, name, layer);
+            };
             
-            // Collect MTP layer indices  
-            std::vector<int> mtp_layers;
-            for (int il = n_transformer_layers; il < n_layer; ++il) {
-                if (model.layers[il].nextn.eh_proj && model.layers[il].nextn.shared_head_head) {
-                    mtp_layers.push_back(il);
+            // Try enhanced MTP processing with token embedding support
+            llama_token last_token_id = 0; // TODO: Extract from inference context
+            mtp_output = LLAMA_MTP_ENHANCED_PROCESS(model, ctx0, inpL, last_token_id, cb_wrapper);
+            
+            // Fallback to original optimized MTP if enhanced fails
+            if (!mtp_output || mtp_output == inpL) {
+                auto mtp_config = llama_mtp_config_fast();
+                llama_mtp_processor mtp_proc(model, mtp_config);
+                
+                // Collect MTP layer indices
+                std::vector<int> mtp_layers;
+                for (int il = n_transformer_layers; il < n_layer; ++il) {
+                    if (model.layers[il].nextn.eh_proj && model.layers[il].nextn.shared_head_head) {
+                        mtp_layers.push_back(il);
+                    }
+                }
+                
+                if (!mtp_layers.empty()) {
+                    mtp_output = mtp_proc.process_mtp_layers(ctx0, inpL, mtp_layers, cb_wrapper);
                 }
             }
             
-            // Process all MTP layers efficiently with parallel token prediction
-            if (!mtp_layers.empty()) {
-                // Create a callback wrapper to match the expected signature
-                auto cb_wrapper = [this](ggml_tensor * tensor, const char * name, int layer) {
-                    this->cb(tensor, name, layer);
-                };
-                mtp_output = mtp_proc.process_mtp_layers(ctx0, inpL, mtp_layers, cb_wrapper);
-                if (!mtp_output) mtp_output = inpL; // Fallback to input
-                cb(mtp_output, "mtp_final_output", -1);
-            }
+            if (!mtp_output) mtp_output = inpL; // Final fallback to input
+            cb(mtp_output, "mtp_enhanced_final_output_moe", -1);
+        }
             
             // Manual fallback processing (kept for compatibility testing)
             if (false) { // Disable manual processing - remove after verification
