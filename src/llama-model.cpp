@@ -11,6 +11,7 @@
 #include "llama-mtp-optimized.h"  // For optimized MTP processing
 #include "llama-mtp-enhanced.h"   // For enhanced vLLM-style MTP processing
 #include "llama-mtp-stable.h"     // For stable MTP configurations
+#include "llama-mtp-manager.h"    // For MTP performance management
 #include "llama-memory-hybrid.h"
 #include "llama-memory-recurrent.h"
 
@@ -27,6 +28,9 @@
 #include <regex>
 #include <sstream>
 #include <stdexcept>
+
+// Define the global MTP manager (declared as extern in llama-mtp-manager.h)
+llama_mtp_performance_manager* g_mtp_manager = nullptr;
 
 const char * llm_type_name(llm_type type) {
     switch (type) {

@@ -3,6 +3,10 @@
 
 #include "llama-mtp-integration.h"
 #include "llama-mtp-processor.h"
+#include "llama-mtp-manager.h"
+
+// Define the global MTP manager (declared as extern in llama-mtp-manager.h)
+llama_mtp_performance_manager* g_mtp_manager = nullptr;
 
 // Enhanced GLM4 MoE builder with complete MTP integration
 // To be integrated into llama-model.cpp replacing the existing llm_build_glm4_moe
