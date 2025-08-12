@@ -90,6 +90,9 @@ struct llama_mtp_predictor_layer {
         const llama_mtp_step_context & step_ctx,
         const llama_hparams & hparams
     ) const {
+        (void)input_ids;    // Suppress unused parameter warning
+        (void)positions;    // Suppress unused parameter warning
+        (void)step_ctx;     // Suppress unused parameter warning
         if (!inputs_embeds || !previous_hidden_states || !eh_proj) {
             return nullptr;
         }

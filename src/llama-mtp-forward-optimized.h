@@ -8,6 +8,7 @@
 #include "ggml.h"
 #include <vector>
 #include <memory>
+#include <cmath>
 
 // Optimized attention computation for MTP layers
 struct llama_mtp_attention {
@@ -104,6 +105,7 @@ class llama_mtp_layer_optimized {
 private:
     const llama_hparams & hparams;
     
+public:
     // Layer weights
     struct layer_weights {
         ggml_tensor * enorm = nullptr;
@@ -124,7 +126,10 @@ private:
         // Shared head
         ggml_tensor * shared_head_norm = nullptr;
         ggml_tensor * shared_head_head = nullptr;
-    } weights;
+    };
+
+private:
+    layer_weights weights;
     
 public:
     llama_mtp_layer_optimized(const llama_hparams & hparams_) : hparams(hparams_) {}
@@ -143,6 +148,8 @@ public:
         ggml_tensor * inputs_embeds,
         ggml_tensor * attention_mask = nullptr
     ) {
+        (void)input_ids;    // Suppress unused parameter warning
+        (void)positions;    // Suppress unused parameter warning
         if (!inputs_embeds || !previous_hidden_states) return nullptr;
         
         // Phase 1: Input processing and normalization
@@ -179,10 +186,10 @@ public:
             // Compute QKV
             ggml_tensor * qkv = ggml_mul_mat(ctx, weights.wqkv, attn_input);
             
-            const int64_t n_embd = hparams.n_embd;
+            (void)n_embd;  // Suppress unused variable warning
             const int64_t n_tokens = qkv->ne[1];
-            const int32_t n_head = hparams.n_head;
-            const int32_t n_head_kv = hparams.n_head_kv;
+            const int32_t n_head = hparams.n_head(hparams.n_embd);
+            const int32_t n_head_kv = hparams.n_head_kv(hparams.n_embd);
             const int32_t n_embd_head = hparams.n_embd_head_k;
             
             // Split QKV
@@ -195,7 +202,7 @@ public:
             ggml_tensor * v = ggml_view_2d(ctx, qkv, v_size, n_tokens, qkv->nb[1], (q_size + k_size) * sizeof(float));
             
             // Compute attention
-            float scale = 1.0f / sqrtf(static_cast<float>(n_embd_head));
+            float scale = 1.0f / std::sqrt(static_cast<float>(n_embd_head));
             ggml_tensor * attn_output = llama_mtp_attention::compute_attention(
                 ctx, q, k, v, attention_mask, n_head, n_head_kv, n_embd_head, scale
             );
@@ -277,7 +284,7 @@ public:
     }
     
     // Set weights for specific MTP layer
-    void set_layer_weights(int32_t layer_idx, const typename llama_mtp_layer_optimized::layer_weights & weights) {
+    void set_layer_weights(int32_t layer_idx, const llama_mtp_layer_optimized::layer_weights & weights) {
         int32_t mtp_idx = layer_idx - step_context.mtp_start_layer;
         if (mtp_idx >= 0 && mtp_idx < static_cast<int32_t>(mtp_layers.size())) {
             mtp_layers[mtp_idx]->set_weights(weights);
