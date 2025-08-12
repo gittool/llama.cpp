@@ -6,6 +6,8 @@
 #include "llama-memory.h"
 #include "llama-mmap.h"
 #include "llama-model.h"
+#include "llama-mtp-enhanced.h"
+#include "llama-mtp-forward-optimized.h"
 
 #include <cinttypes>
 #include <cmath>
@@ -367,6 +369,15 @@ llama_context::llama_context(
             LLAMA_LOG_INFO("%s: graph splits = %d\n", __func__, n_splits_pp);
         } else {
             LLAMA_LOG_INFO("%s: graph splits = %d (with bs=%d), %d (with bs=1)\n", __func__, n_splits_pp, n_tokens, n_splits_tg);
+        }
+    }
+    
+    // Initialize enhanced MTP processor if model supports it
+    if (llama_model_has_mtp_support(&model)) {
+        mtp_processor = create_mtp_processor(model);
+        if (mtp_processor) {
+            LLAMA_LOG_INFO("%s: initialized enhanced MTP processor with %d layers\n", 
+                __func__, model.hparams.nextn_predict_layers);
         }
     }
 }
@@ -2974,6 +2985,13 @@ int32_t llama_predict_mtp_tokens(
     
     if (!llama_context_can_use_mtp(ctx)) {
         return 0;
+    }
+    
+    // Use enhanced MTP processor if available
+    if (ctx->mtp_processor && ctx->mtp_processor->is_available()) {
+        // TODO: Implement enhanced MTP prediction using the new processor
+        // This would require creating appropriate input tensors from the current context
+        // For now, fall back to the original implementation
     }
     
     // Get logits for the specified token position

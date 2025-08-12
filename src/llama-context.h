@@ -10,6 +10,7 @@
 
 #include <map>
 #include <vector>
+#include <memory>
 
 struct llama_model;
 class llama_batch_allocr;
@@ -19,6 +20,8 @@ class llama_io_write_i;
 
 struct llama_memory_i;
 struct llama_memory_context_i;
+
+class llama_mtp_forward_processor;
 
 struct llama_context {
     // init scheduler and compute buffers, reserve worst-case graphs
@@ -244,6 +247,9 @@ private:
     // sequence embeddings output (map of [n_embd] vectors)
     // populated only when pooling_type != LLAMA_POOLING_TYPE_NONE
     std::map<llama_seq_id, std::vector<float>> embd_seq;
+    
+    // Enhanced MTP processor for multi-token prediction
+    std::unique_ptr<llama_mtp_forward_processor> mtp_processor;
 
     // reuse the batch_allocr to avoid unnecessary memory allocations
     std::unique_ptr<llama_batch_allocr> balloc;
