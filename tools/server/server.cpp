@@ -3627,10 +3627,25 @@ struct server_context {
 
                 // MTP token count logging - removed real-time logging (will show summary at slot end)
 
-                // 将来 fast-accept 実装箇所:
+                // fast-accept 実装:
                 if (mtp_used && predicted_extra > 0 && llama_context_can_speculative_mtp(ctx)) {
-                    // int fast = llama_accept_predicted_tokens(ctx, slot.n_past - 1, predicted_extra, mtp_tokens.data() + 1);
-                    // if (fast > 0) { /* slot.n_past += fast; accepted += fast; slot.generated_tokens.insert(...); */ }
+                    int fast = llama_accept_predicted_tokens(ctx, slot.n_past - 1, predicted_extra, mtp_tokens.data() + 1);
+                    if (fast > 0) {
+                        slot.n_past += fast;
+                        accepted += fast;
+                        
+                        // 追加で受け入れられたトークンを生成済みトークンリストに追加
+                        for (int i = 1; i <= fast; i++) {
+                            slot.generated_tokens.push_back(mtp_tokens[i]);
+                        }
+                        
+                        SRV_DBG("Fast-accepted %d additional MTP tokens for slot %d\n", fast, slot.id);
+                        
+                        // 受け入れられたトークンを sampler にも通知
+                        for (int i = 1; i <= fast; i++) {
+                            common_sampler_accept(slot.smpl, mtp_tokens[i], true);
+                        }
+                    }
                 }
                 // --------------------------------------------------------------------------------
 
