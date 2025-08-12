@@ -13883,18 +13883,13 @@ struct llm_build_glm4 : public llm_graph_context {
             } // End manual fallback processing
         }
 
-        // Final norm
-        cur = build_norm(mtp_output,
-                model.output_norm,
-                NULL,
-                LLM_NORM_RMS, -1);
-
+        cur = mtp_output;
+        
+        cur = build_norm(cur, model.output_norm, NULL, LLM_NORM_RMS, -1);
         cb(cur, "result_norm", -1);
         res->t_embd = cur;
 
-        // Output projection
         cur = build_lora_mm(model.output, cur);
-
         cb(cur, "result_output", -1);
         res->t_logits = cur;
 
@@ -14151,18 +14146,13 @@ struct llm_build_glm4_moe : public llm_graph_context {
             } // End manual fallback processing
         }
 
-        // Final norm
-        cur = build_norm(mtp_output,
-                model.output_norm,
-                NULL,
-                LLM_NORM_RMS, -1);
-
+        cur = mtp_output;
+        
+        cur = build_norm(cur, model.output_norm, NULL, LLM_NORM_RMS, -1);
         cb(cur, "result_norm", -1);
         res->t_embd = cur;
 
-        // lm_head
         cur = build_lora_mm(model.output, cur);
-
         cb(cur, "result_output", -1);
         res->t_logits = cur;
 
