@@ -1497,6 +1497,7 @@ llm_graph_params llama_context::graph_params(
         /*.mctx        =*/ mctx,
         /*.cross       =*/ &cross,
         /*.n_outputs   =*/ n_outputs,
+        /*.n_mtp       =*/ cparams.n_mtp,
         /*.cb          =*/ graph_get_cb(),
         /*.res         =*/ res,
     };
@@ -3181,24 +3182,6 @@ bool llama_context_can_speculative_mtp(const struct llama_context * ctx) {
     return false; // until hidden/KV exposure is added
 }
 
-llm_graph_params llama_mtp_graph_params(struct llama_context * ctx, llm_graph_result * res, const llama_ubatch & ubatch) {
-    return {
-        /*.arch        =*/ ctx->model.arch,
-        /*.hparams     =*/ ctx->model.hparams,
-        /*.cparams     =*/ ctx->cparams,
-        /*.ubatch      =*/ ubatch,
-        /*.gtype       =*/ LLM_GRAPH_TYPE_DECODER,
-        /*.sched       =*/ ctx->sched.get(),
-        /*.backend_cpu =*/ ctx->backend_cpu,
-        /*.cvec        =*/ &ctx->cvec,
-        /*.loras       =*/ &ctx->loras,
-        /*.mctx        =*/ ctx->memory->init_batch(*ctx->balloc, 1, false).get(),
-        /*.cross       =*/ &ctx->cross,
-        /*.n_outputs   =*/ 1,
-        /*.cb          =*/ ctx->graph_get_cb(),
-        /*.res         =*/ res,
-    };
-}
 
 // NOTE (Speculative integration placeholder):
 // 真の forward 削減を行う speculative verification には「予測した複数トークン分の中間 hidden/KV」を同時生成または

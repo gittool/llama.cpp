@@ -35,6 +35,8 @@ struct llama_cparams {
     bool op_offload;
     bool kv_unified;
 
+    int32_t n_mtp;    // MTP mode: 1=disabled, 2=predict 1 additional token, etc.
+
     enum llama_pooling_type pooling_type;
 
     ggml_backend_sched_eval_callback cb_eval;

@@ -5,13 +5,13 @@
 #include "log.h"
 #include "common.h"
 #include "sampling.h"
+#include "../src/llama-graph.h"
 
 #include <cstring>
 #include <algorithm>
 #include <map>
 
 // Forward declarations
-llm_graph_params llama_mtp_graph_params(struct llama_context * ctx, llm_graph_result * res, const llama_ubatch & ubatch);
 ggml_cgraph * llama_build_mtp_graph(const llama_model * model, const llm_graph_params & params,
     ggml_tensor * hidden_state_inp, llama_token last_token_id, int n_past);
 llama_token * llama_get_embeddings_tensor(struct llama_context * ctx);
