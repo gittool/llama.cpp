@@ -10,6 +10,15 @@
 #include <algorithm>
 #include <map>
 
+// Forward declarations
+llm_graph_params llama_mtp_graph_params(struct llama_context * ctx, llm_graph_result * res, const llama_ubatch & ubatch);
+ggml_cgraph * llama_build_mtp_graph(const llama_model * model, const llm_graph_params & params,
+    ggml_tensor * hidden_state_inp, llama_token last_token_id, int n_past);
+llama_token * llama_get_embeddings_tensor(struct llama_context * ctx);
+int llama_graph_compute(struct llama_context * ctx, ggml_cgraph * gf, bool clear_pool);
+ggml_tensor * llama_graph_result_get_logits(llm_graph_result * res);
+void llama_set_logits(struct llama_context * ctx, ggml_tensor * logits);
+
 #define SPEC_VOCAB_MAX_SIZE_DIFFERENCE  128
 #define SPEC_VOCAB_CHECK_START_TOKEN_ID 5
 
@@ -357,5 +366,45 @@ llama_tokens common_speculative_gen_draft(
             result.resize(params.n_draft);
         }
     }
+    return result;
+}
+
+llama_tokens mtp_speculative_gen_draft(
+        struct common_sampler * smpl,
+        struct llama_context * ctx,
+        llama_token id_last,
+        int32_t n_past,
+        int32_t last_tok_idx) {
+
+    llama_tokens result;
+
+    LOG_INF("MTP speculative draft generation starting\n");
+
+    // Check if MTP logits are available
+    float * mtp_logits = llama_get_logits_mtp_ith(ctx, last_tok_idx);
+    if (mtp_logits == nullptr) {
+        LOG_INF("No MTP logits available\n");
+        return result;
+    }
+
+    LOG_INF("MTP logits available, sampling draft token\n");
+
+    // Use MTP logits directly for sampling
+    // Note: This assumes the MTP logits have been computed in the last forward pass
+    {
+        common_sampler_sample(smpl, ctx, last_tok_idx, true);
+
+        const auto * cur_p = common_sampler_get_candidates(smpl);
+
+        for (int k = 0; k < std::min(3, (int) cur_p->size); ++k) {
+            LOG_INF(" - MTP draft candidate %3d: %6d (%8.3f) '%s'\n",
+                    k, cur_p->data[k].id, cur_p->data[k].p, common_token_to_piece(ctx, cur_p->data[k].id).c_str());
+        }
+
+        // add drafted token
+        const llama_token id = cur_p->data[0].id;
+        result.push_back(id);
+    }
+
     return result;
 }

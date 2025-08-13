@@ -33,3 +33,11 @@ llama_tokens common_speculative_gen_draft(
         struct common_speculative_params   params,
                       const llama_tokens & prompt,
                              llama_token   id_last);
+
+// MTP speculative draft generation
+llama_tokens mtp_speculative_gen_draft(
+        struct common_sampler * smpl,
+        struct llama_context * ctx,
+        llama_token id_last,
+        int32_t n_past,
+        int32_t last_tok_idx);

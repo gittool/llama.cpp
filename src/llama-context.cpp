@@ -50,6 +50,7 @@ llama_context::llama_context(
     cparams.flash_attn       = params.flash_attn;
     cparams.no_perf          = params.no_perf;
     cparams.pooling_type     = params.pooling_type;
+    cparams.n_mtp            = params.n_mtp;
     cparams.warmup           = false;
 
     cparams.n_ctx            = params.n_ctx           == 0    ? hparams.n_ctx_train           : params.n_ctx;
@@ -559,6 +560,52 @@ float * llama_context::get_logits_ith(int32_t i) {
         return logits + j*model.vocab.n_tokens();
     } catch (const std::exception & err) {
         LLAMA_LOG_ERROR("%s: invalid logits id %d, reason: %s\n", __func__, i, err.what());
+#ifndef NDEBUG
+        GGML_ABORT("fatal error");
+#else
+        return nullptr;
+#endif
+    }
+}
+
+float * llama_context::get_logits_mtp() {
+    output_reorder();
+
+    return logits_mtp;
+}
+
+float * llama_context::get_logits_mtp_ith(int32_t i) {
+    int64_t j = -1;
+
+    output_reorder();
+
+    try {
+        if (logits_mtp == nullptr) {
+            throw std::runtime_error("no MTP logits");
+        }
+
+        if (i < 0) {
+            j = n_outputs + i;
+            if (j < 0) {
+                throw std::runtime_error(format("negative index out of range [0, %d)", n_outputs));
+            }
+        } else if ((size_t) i >= output_ids.size()) {
+            throw std::runtime_error(format("out of range [0, %zu)", output_ids.size()));
+        } else {
+            j = output_ids[i];
+        }
+
+        if (j < 0) {
+            throw std::runtime_error(format("batch.logits[%d] != true", i));
+        }
+        if (j >= n_outputs) {
+            // This should not happen
+            throw std::runtime_error(format("corrupt output buffer (j=%" PRId64 ", n_outputs=%d)", j, n_outputs));
+        }
+
+        return logits_mtp + j*model.vocab.n_tokens();
+    } catch (const std::exception & err) {
+        LLAMA_LOG_ERROR("%s: invalid MTP logits id %d, reason: %s\n", __func__, i, err.what());
 #ifndef NDEBUG
         GGML_ABORT("fatal error");
 #else
@@ -1117,6 +1164,7 @@ int llama_context::decode(const llama_batch & batch_inp) {
         //}
 
         auto * t_logits = res->get_logits();
+        auto * t_logits_mtp = res->get_logits_mtp();
         auto * t_embd   = cparams.embeddings ? res->get_embd() : nullptr;
 
         if (t_embd && res->get_embd_pooled()) {
@@ -1135,6 +1183,20 @@ int llama_context::decode(const llama_batch & batch_inp) {
                 GGML_ASSERT( n_outputs_prev + n_outputs <= n_outputs_all);
                 GGML_ASSERT((n_outputs_prev + n_outputs)*n_vocab <= (int64_t) logits_size);
                 ggml_backend_tensor_get_async(backend_res, t_logits, logits_out, 0, n_outputs*n_vocab*sizeof(float));
+            }
+        }
+
+        // extract MTP logits
+        if (t_logits_mtp && n_outputs > 0 && logits_mtp != nullptr) {
+            ggml_backend_t backend_mtp = ggml_backend_sched_get_tensor_backend(sched.get(), t_logits_mtp);
+            GGML_ASSERT(backend_mtp != nullptr);
+
+            float * logits_mtp_out = logits_mtp + n_outputs_prev*n_vocab;
+
+            if (n_outputs) {
+                GGML_ASSERT( n_outputs_prev + n_outputs <= n_outputs_all);
+                GGML_ASSERT((n_outputs_prev + n_outputs)*n_vocab <= (int64_t) logits_mtp_size);
+                ggml_backend_tensor_get_async(backend_mtp, t_logits_mtp, logits_mtp_out, 0, n_outputs*n_vocab*sizeof(float));
             }
         }
 
@@ -1284,13 +1346,17 @@ uint32_t llama_context::output_reserve(int32_t n_outputs) {
     logits_size = has_logits ? n_vocab*n_outputs_max : 0;
     embd_size   = has_embd   ?  n_embd*n_outputs_max : 0;
 
+    // MTP logits: allocate only when MTP is enabled (n_mtp > 1) and NextN layers are available
+    bool has_logits_mtp = has_logits && cparams.n_mtp > 1 && llama_model_n_mtp_layers(&model) > 0;
+    logits_mtp_size = has_logits_mtp ? n_vocab*n_outputs_max : 0;
+
     if (output_ids.empty()) {
         // init, never resized afterwards
         output_ids.resize(n_batch);
     }
 
     const size_t prev_size = buf_output ? ggml_backend_buffer_get_size(buf_output.get()) : 0;
-    const size_t new_size  = (logits_size + embd_size) * sizeof(float);
+    const size_t new_size  = (logits_size + logits_mtp_size + embd_size) * sizeof(float);
 
     // alloc only when more than the current capacity is required
     // TODO: also consider shrinking the buffer
@@ -1302,6 +1368,7 @@ uint32_t llama_context::output_reserve(int32_t n_outputs) {
 #endif
             buf_output = nullptr;
             logits = nullptr;
+            logits_mtp = nullptr;
             embd = nullptr;
         }
 
@@ -1321,8 +1388,9 @@ uint32_t llama_context::output_reserve(int32_t n_outputs) {
 
     float * output_base = (float *) ggml_backend_buffer_get_base(buf_output.get());
 
-    logits = has_logits ? output_base               : nullptr;
-    embd   = has_embd   ? output_base + logits_size : nullptr;
+    logits     = has_logits     ? output_base                           : nullptr;
+    logits_mtp = has_logits_mtp ? output_base + logits_size             : nullptr;
+    embd       = has_embd       ? output_base + logits_size + logits_mtp_size : nullptr;
 
     // set all ids as invalid (negative)
     std::fill(output_ids.begin(), output_ids.end(), -1);
@@ -2261,7 +2329,7 @@ llama_context_params llama_context_default_params() {
         /*.yarn_beta_slow              =*/ 1.0f,
         /*.yarn_orig_ctx               =*/ 0,
         /*.defrag_thold                =*/ -1.0f,
-        /*.n_predict_tokens            =*/ 4,     // MTP enabled by default - SPEEDUP: increased from 0 to 4
+        /*.n_mtp                       =*/ 1,     // MTP disabled by default (1 = disabled, 2+ = enabled)
         /*.mtp_accept_rate             =*/ 0.6f,  // Default acceptance threshold - SPEEDUP: lowered from 0.7f for more acceptance
         /*.cb_eval                     =*/ nullptr,
         /*.cb_eval_user_data           =*/ nullptr,
@@ -2417,6 +2485,18 @@ float * llama_get_logits_ith(llama_context * ctx, int32_t i) {
     ctx->synchronize();
 
     return ctx->get_logits_ith(i);
+}
+
+float * llama_get_logits_mtp(llama_context * ctx) {
+    ctx->synchronize();
+
+    return ctx->get_logits_mtp();
+}
+
+float * llama_get_logits_mtp_ith(llama_context * ctx, int32_t i) {
+    ctx->synchronize();
+
+    return ctx->get_logits_mtp_ith(i);
 }
 
 float * llama_get_embeddings(llama_context * ctx) {
@@ -3099,6 +3179,25 @@ int32_t llama_accept_predicted_tokens(struct llama_context * ctx, int32_t idx, i
 bool llama_context_can_speculative_mtp(const struct llama_context * ctx) {
     (void) ctx;
     return false; // until hidden/KV exposure is added
+}
+
+llm_graph_params llama_mtp_graph_params(struct llama_context * ctx, llm_graph_result * res, const llama_ubatch & ubatch) {
+    return {
+        /*.arch        =*/ ctx->model.arch,
+        /*.hparams     =*/ ctx->model.hparams,
+        /*.cparams     =*/ ctx->cparams,
+        /*.ubatch      =*/ ubatch,
+        /*.gtype       =*/ LLM_GRAPH_TYPE_DECODER,
+        /*.sched       =*/ ctx->sched.get(),
+        /*.backend_cpu =*/ ctx->backend_cpu,
+        /*.cvec        =*/ &ctx->cvec,
+        /*.loras       =*/ &ctx->loras,
+        /*.mctx        =*/ ctx->memory->init_batch(*ctx->balloc, 1, false).get(),
+        /*.cross       =*/ &ctx->cross,
+        /*.n_outputs   =*/ 1,
+        /*.cb          =*/ ctx->graph_get_cb(),
+        /*.res         =*/ res,
+    };
 }
 
 // NOTE (Speculative integration placeholder):

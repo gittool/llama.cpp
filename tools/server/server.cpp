@@ -1400,6 +1400,10 @@ struct server_slot {
     int32_t n_draft_total = 0;      // Total draft tokens generated
     int32_t n_draft_accepted = 0;   // Draft tokens actually accepted
 
+    // MTP support flag
+    bool has_mtp = false;
+    int32_t last_tok_idx = -1;
+
     void reset() {
         SLT_DBG(*this, "%s", "\n");
 
@@ -2156,6 +2160,18 @@ struct server_context {
                 for (auto &pair : params_base.speculative.replacements) {
                     common_speculative_add_replacement_tgt_dft(slot.spec, pair.first.c_str(), pair.second.c_str());
                 }
+            }
+            else if (llama_model_n_nextn_layer(model) > 0) {
+                SRV_INF("model has nextn layers = %d\n", llama_model_n_nextn_layer(model));
+                slot.has_mtp = true;
+
+                // assume one speculative token (true of all well-known MTP models so far)
+                slot.batch_spec = llama_batch_init(2, 0, 1);
+                params_base.speculative.n_min = 0;
+                params_base.speculative.n_max = 1;
+                
+                // Enable MTP in context params (2 = predict 1 additional token)
+                cparams.n_mtp = 2; 
             }
 
             SLT_INF(slot, "new slot n_ctx_slot = %d\n", slot.n_ctx);
@@ -3709,13 +3725,20 @@ struct server_context {
 
                 llama_token id = slot.sampled;
 
-                struct common_speculative_params params_spec;
-                params_spec.n_draft   = n_draft_max;
-                params_spec.n_reuse   = llama_n_ctx(slot.ctx_dft) - slot.params.speculative.n_max;
-                params_spec.p_min     = slot.params.speculative.p_min;
+                llama_tokens draft;
+                if (slot.has_mtp) {
+                    SLT_DBG(slot, "starting mtp draft: %d\n", 1);
+                    draft = mtp_speculative_gen_draft(slot.smpl, slot.ctx, id, slot.n_past, slot.last_tok_idx);
+                }
+                else {
+                    struct common_speculative_params params_spec;
+                    params_spec.n_draft   = n_draft_max;
+                    params_spec.n_reuse   = llama_n_ctx(slot.ctx_dft) - slot.params.speculative.n_max;
+                    params_spec.p_min     = slot.params.speculative.p_min;
 
-                const llama_tokens & cached_text_tokens = slot.cache_tokens.get_text_tokens();
-                llama_tokens draft = common_speculative_gen_draft(slot.spec, params_spec, cached_text_tokens, id);
+                    const llama_tokens & cached_text_tokens = slot.cache_tokens.get_text_tokens();
+                    draft = common_speculative_gen_draft(slot.spec, params_spec, cached_text_tokens, id);
+                }
 
                 // ignore small drafts
                 if (slot.params.speculative.n_min > (int) draft.size()) {

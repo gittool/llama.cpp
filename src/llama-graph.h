@@ -404,6 +404,7 @@ struct llm_graph_params {
     const llama_cross            * cross;
 
     uint32_t n_outputs;
+    int32_t  n_mtp;  // MTP mode: 1=disabled, 2=predict 1 additional token, etc.
 
     llm_graph_cb cb;
 
@@ -462,6 +463,7 @@ public:
 
     ggml_tensor * get_tokens()      const { return t_tokens; }
     ggml_tensor * get_logits()      const { return t_logits; }
+    ggml_tensor * get_logits_mtp()  const { return t_logits_mtp; }
     ggml_tensor * get_embd()        const { return t_embd; }
     ggml_tensor * get_embd_pooled() const { return t_embd_pooled; }
 
@@ -488,6 +490,7 @@ public:
     // important graph nodes
     ggml_tensor * t_tokens      = nullptr;
     ggml_tensor * t_logits      = nullptr;
+    ggml_tensor * t_logits_mtp  = nullptr;  // MTP additional logits
     ggml_tensor * t_embd        = nullptr;
     ggml_tensor * t_embd_pooled = nullptr;
 
