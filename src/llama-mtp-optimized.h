@@ -1,16 +1,18 @@
-// Optimized Multi-Token Prediction (MTP) Implementation
-// This file provides enhanced MTP functionality for improved token generation speed
+// Multi-Token Prediction (MTP) Implementation for GLM4
+// Unified MTP processing with proper dimension handling and error checking
 
 #pragma once
+
 #include "llama-model.h"
 #include <vector>
+#include <functional>
 
 // MTP Configuration structure
 struct llama_mtp_config {
-    int n_predict_ahead = 4;       // Number of tokens to predict in parallel
-    float confidence_threshold = 0.7f;  // Minimum confidence to accept prediction
-    bool enable_speculative = true;     // Enable speculative execution
-    bool enable_parallel = true;        // Enable parallel processing
+    int n_predict_ahead = 4;               // Number of tokens to predict in parallel
+    float confidence_threshold = 0.7f;    // Minimum confidence to accept prediction
+    bool enable_speculative = true;       // Enable speculative execution
+    bool enable_parallel = true;          // Enable parallel processing
 };
 
 // Enhanced MTP processor with parallel token prediction
@@ -71,7 +73,7 @@ private:
         return predictions ? predictions : input;
     }
     
-    // Apply embedding projection with automatic dimension handling
+    // Apply embedding projection with proper dimension validation
     ggml_tensor * apply_projection(
         ggml_context * ctx0, 
         ggml_tensor * proj_weight, 
@@ -79,23 +81,25 @@ private:
         int layer_idx,
         const std::function<void(ggml_tensor *, const char *, int)> & cb
     ) {
-        if (!proj_weight || !input) return nullptr;
+        if (!proj_weight || !input) {
+            return nullptr;
+        }
         
         const int n_embd = model.hparams.n_embd;
         ggml_tensor * weight_for_mul = proj_weight;
         
-        // Automatic dimension handling for different model variants
-        if (proj_weight->ne[0] == 2 * n_embd && proj_weight->ne[1] == n_embd) {
-            // GLM4_MOE case: transpose for correct multiplication
-            weight_for_mul = ggml_transpose(ctx0, proj_weight);
+        // Handle different projection weight layouts
+        if (proj_weight->ne[0] == n_embd && proj_weight->ne[1] == n_embd) {
+            // Standard GLM4: transpose and make contiguous for proper multiplication
+            weight_for_mul = ggml_cont(ctx0, ggml_transpose(ctx0, proj_weight));
             cb(weight_for_mul, "mtp_proj_transpose", layer_idx);
-        } else if (proj_weight->ne[0] == n_embd && proj_weight->ne[1] == n_embd) {
-            // Standard GLM4 case: transpose for correct multiplication
-            weight_for_mul = ggml_transpose(ctx0, proj_weight);
+        } else if (proj_weight->ne[0] == 2 * n_embd && proj_weight->ne[1] == n_embd) {
+            // GLM4_MOE: transpose for correct multiplication
+            weight_for_mul = ggml_cont(ctx0, ggml_transpose(ctx0, proj_weight));
             cb(weight_for_mul, "mtp_proj_transpose", layer_idx);
         }
         
-        // Safety check for dimension compatibility
+        // Validate dimensions before multiplication
         if (weight_for_mul->ne[0] != input->ne[0]) {
             return nullptr; // Dimension mismatch
         }
@@ -140,9 +144,11 @@ private:
         int layer_idx,
         const std::function<void(ggml_tensor *, const char *, int)> & cb
     ) {
-        if (!nextn.shared_head_head || !input) return nullptr;
+        if (!nextn.shared_head_head || !input) {
+            return nullptr;
+        }
         
-        // Safety check for dimension compatibility
+        // Validate dimension compatibility
         if (nextn.shared_head_head->ne[0] != input->ne[0]) {
             return nullptr;
         }
@@ -150,7 +156,7 @@ private:
         ggml_tensor * predictions = ggml_mul_mat(ctx0, nextn.shared_head_head, input);
         cb(predictions, "mtp_head", layer_idx);
         
-        // Final normalization
+        // Apply final normalization if available
         if (nextn.shared_head_norm) {
             predictions = ggml_rms_norm(ctx0, predictions, 1e-6f);
             predictions = ggml_mul(ctx0, predictions, nextn.shared_head_norm);

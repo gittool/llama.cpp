@@ -41,7 +41,7 @@ def test_conversion():
         if model_type in ['glm', 'chatglm']:
             print("✓ Detected GLM model")
         else:
-            print(f"Warning: Model type {model_type} might not be supported")
+            print(f"Warning: Model type '{model_type}' may not fully support MTP features")
         
         if num_nextn_predict_layers > 0:
             print(f"✓ Model has {num_nextn_predict_layers} MTP layers")
