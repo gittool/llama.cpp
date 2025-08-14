@@ -2161,8 +2161,8 @@ struct server_context {
                     common_speculative_add_replacement_tgt_dft(slot.spec, pair.first.c_str(), pair.second.c_str());
                 }
             }
-            else if (llama_model_n_nextn_layer(model) > 0) {
-                SRV_INF("model has nextn layers = %d\n", llama_model_n_nextn_layer(model));
+            else if (llama_model_n_mtp_layers(model) > 0) {
+                SRV_INF("model has nextn layers = %d\n", llama_model_n_mtp_layers(model));
                 slot.has_mtp = true;
 
                 // assume one speculative token (true of all well-known MTP models so far)
@@ -2170,8 +2170,8 @@ struct server_context {
                 params_base.speculative.n_min = 0;
                 params_base.speculative.n_max = 1;
                 
-                // Enable MTP in context params (2 = predict 1 additional token)
-                cparams.n_mtp = 2; 
+                // Note: MTP will auto-enable when nextn layers are available
+                // Context was already created, so MTP parameters are handled automatically
             }
 
             SLT_INF(slot, "new slot n_ctx_slot = %d\n", slot.n_ctx);

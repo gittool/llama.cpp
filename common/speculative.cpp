@@ -376,6 +376,10 @@ llama_tokens mtp_speculative_gen_draft(
         int32_t n_past,
         int32_t last_tok_idx) {
 
+    // Suppress unused parameter warnings
+    (void)id_last;
+    (void)n_past;
+
     llama_tokens result;
 
     LOG_INF("MTP speculative draft generation starting\n");
