@@ -14142,19 +14142,19 @@ struct llm_build_glm4_moe_mtp : public llm_graph_context {
 
         // self-attention
         {
-            ggml_tensor * Qcur = build_lora_mm(mtp_layer.wq, cur);
+            ggml_tensor * Qcur = build_lora_mm(mtp_layer.wq, attn_inp);
             if (mtp_layer.bq) {
                 Qcur = ggml_add(ctx0, Qcur, mtp_layer.bq);
             }
             cb(Qcur, "Qcur", il);
 
-            ggml_tensor * Kcur = build_lora_mm(mtp_layer.wk, cur);
+            ggml_tensor * Kcur = build_lora_mm(mtp_layer.wk, attn_inp);
             if (mtp_layer.bk) {
                 Kcur = ggml_add(ctx0, Kcur, mtp_layer.bk);
             }
             cb(Kcur, "Kcur", il);
 
-            ggml_tensor * Vcur = build_lora_mm(mtp_layer.wv, cur);
+            ggml_tensor * Vcur = build_lora_mm(mtp_layer.wv, attn_inp);
             if (mtp_layer.bv) {
                 Vcur = ggml_add(ctx0, Vcur, mtp_layer.bv);
             }
@@ -18847,6 +18847,11 @@ ggml_cgraph * llama_model::build_mtp_graph(const llm_graph_params& params,
     printf("step: '%d'\n", 57);
     return llm->res->get_gf();
 }
+
+// Forward declarations for MTP functions
+int32_t llama_model_n_nextn_layer(const llama_model * model);
+ggml_cgraph * llama_build_mtp_graph(const llama_model * model, const llm_graph_params & params,
+    ggml_tensor * hidden_state_inp, llama_token last_token_id, int n_past);
 
 int32_t llama_model_n_nextn_layer(const llama_model * model) {
     return model->hparams.nextn_predict_layers;

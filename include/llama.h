@@ -1368,6 +1368,11 @@ extern "C" {
     /// @return The number of NextN/MTP layers, 0 if not supported
     LLAMA_API int32_t llama_model_n_mtp_layers(const struct llama_model * model);
 
+    /// @details Get the number of NextN layers in the model (alternative name)
+    /// @param model The model to query
+    /// @return The number of NextN layers, 0 if not supported
+    LLAMA_API int32_t llama_model_n_nextn_layer(const struct llama_model * model);
+
     /// @details Check if MTP can be used with the current context state
     /// @param ctx The context to check
     /// @return true if MTP can be used, false otherwise
