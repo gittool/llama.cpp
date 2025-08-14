@@ -3057,8 +3057,14 @@ int32_t llama_predict_mtp_tokens(
         return 0;
     }
     
-    // Get logits for the specified token position
-    const float * logits = llama_get_logits_ith(ctx, idx);
+    // Prefer MTP logits if available; fallback to standard logits
+    const float * logits = nullptr;
+    if (ctx->get_logits_mtp()) {
+        logits = ctx->get_logits_mtp_ith(idx);
+    }
+    if (!logits) {
+        logits = llama_get_logits_ith(ctx, idx);
+    }
     if (!logits) {
         return 0;
     }
@@ -3152,42 +3158,49 @@ int32_t llama_predict_mtp_tokens(
 
 // ---- Speculative MTP experimental stubs ----
 
-// Experimental: return hidden state used for current logits as MTP hidden[0]
-// For scenario A (shared_head_head shape = [n_embd, n_vocab]) we do not yet have true future hidden states.
-// This returns only the last token hidden (i_pred==0). Future indices => nullptr.
+// ---- Speculative MTP experimental functions ----
+
+// Experimental: Get hidden state for MTP prediction
+// Note: Currently limited to i_pred=0, returns embedding for decoded token
 const float * llama_get_mtp_hidden_ith(struct llama_context * ctx, int32_t idx, int32_t i_pred) {
-    // 現状: 未来 hidden 未構築。i_pred==0 のとき decode 出力埋め込み (final norm 前後) の該当行を返す。
-    if (!ctx) return nullptr;
-    if (i_pred != 0) return nullptr;
+    if (!ctx || i_pred != 0) {
+        return nullptr; // Only support i_pred=0 for now
+    }
+    
     float * embd = ctx->get_embeddings();
-    if (!embd) return nullptr;
+    if (!embd) {
+        return nullptr;
+    }
+    
     const llama_model & model = ctx->get_model();
     const int n_embd = model.hparams.n_embd;
-    if (idx < 0) return nullptr;
-    // 安全策: ubatch内の idx が連続出力長未満であることを確認できないため、直近 logits 取得パターンでは最後のトークン idx を渡している。
-    // 典型ケース: idx は batch 内相対インデックス (0..n_tokens-1)。
-    // ここでは単純に embd + idx*n_embd を返し、呼び出し側は最後のトークン idx を指定する想定。
-    return embd + (size_t) idx * n_embd;
+    
+    if (idx < 0) {
+        return nullptr;
+    }
+    
+    // Return embedding for the specified token index
+    return embd + static_cast<size_t>(idx) * n_embd;
 }
 
+// Accept predicted tokens (placeholder for future speculative decoding)
 int32_t llama_accept_predicted_tokens(struct llama_context * ctx, int32_t idx, int32_t n_tokens, const llama_token * tokens) {
-    // Placeholder: fast KV insertion for speculative MTP not yet implemented.
-    // Returning 0 indicates no additional tokens were committed beyond the already decoded one.
+    // Currently not implemented - placeholder for future speculative decoding with KV cache optimization
     (void) ctx; (void) idx; (void) n_tokens; (void) tokens;
     return 0;
 }
 
+// Check if context supports speculative MTP (currently disabled)
 bool llama_context_can_speculative_mtp(const struct llama_context * ctx) {
     (void) ctx;
-    return false; // until hidden/KV exposure is added
+    return false; // Disabled until hidden state/KV exposure is properly implemented
 }
 
-
-// NOTE (Speculative integration placeholder):
-// 真の forward 削減を行う speculative verification には「予測した複数トークン分の中間 hidden/KV」を同時生成または
-// draft モデルで生成 -> target 1 forward で検証 という構造が必要。
-// 現行 NextN 実装は logits 連結のみで中間 state を出力していないため、ここでは MTP を
-// speculative の draft token 提供源とする統合は API レベルで未実装。
-// 将来的に NextN 層から中間埋め込みを取得できる拡張が行われた際に、
-// ここに verification パス (batched compare) を追加して複数 step の llama_decode をスキップ可能。
+// NOTE: Speculative MTP integration
+// For true speculative decoding with forward pass reduction, we need:
+// 1. Draft model or MTP layers to generate multiple tokens with intermediate hidden states
+// 2. Target model verification in a single forward pass
+// 3. Batched comparison and acceptance/rejection of predicted tokens
+// Current MTP implementation provides only logits concatenation without intermediate states
+// Future work: Extract intermediate embeddings from MTP layers for speculative verification
 

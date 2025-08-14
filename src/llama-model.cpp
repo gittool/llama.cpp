@@ -1,4 +1,5 @@
 #include "llama-model.h"
+#include "llama-mtp.h"
 
 #include "llama-impl.h"
 #include "llama-mmap.h"
@@ -1442,7 +1443,7 @@ void llama_model::load_hparams(llama_model_loader & ml) {
             {
                 ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
                 
-                // NextN/MTP parameters (for models like GLM-4.5-Air with MTP layers)
+                // MTP (Multi-Token Prediction) parameters for GLM-4.5-Air
                 ml.get_key(LLM_KV_NEXTN_PREDICT_LAYERS,        hparams.nextn_predict_layers, false);
                 
                 switch (hparams.n_layer) {
@@ -1472,12 +1473,12 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                     hparams.expert_gating_func = LLAMA_EXPERT_GATING_FUNC_TYPE_SIGMOID;
                 }
 
-                // NextN/MTP parameters
+                // MTP parameters
                 ml.get_key(LLM_KV_NEXTN_PREDICT_LAYERS,        hparams.nextn_predict_layers, false);
 
                 switch (hparams.n_layer) {
-                    case 47: type = LLM_TYPE_106B_A12B; break; // GLM-4.5-Air (46 layers + 1 NextN layer)
-                    case 93: type = LLM_TYPE_355B_A32B; break; // GLM-4.5 (92 layers + 1 NextN layer)
+                    case 47: type = LLM_TYPE_106B_A12B; break; // GLM-4.5-Air (46 layers + 1 MTP layer)
+                    case 93: type = LLM_TYPE_355B_A32B; break; // GLM-4.5 (92 layers + 1 MTP layer)
                     default: type = LLM_TYPE_UNKNOWN;
                 }
             } break;
@@ -4492,9 +4493,9 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
 
                         layer.ffn_post_norm  = create_tensor(tn(LLM_TENSOR_FFN_POST_NORM, "weight", i), {n_embd}, flags);
 
-                        // Load NextN/MTP tensors if they exist for this layer
+                        // Load MTP tensors if they exist for this layer
                         if (hparams.nextn_predict_layers > 0 && static_cast<uint32_t>(i) >= n_layer - hparams.nextn_predict_layers) {
-                            // Load NextN tensors - these will be used in forward pass for multi-token prediction
+                            // Load MTP tensors - these will be used in forward pass for multi-token prediction
                             layer.nextn.eh_proj = create_tensor(tn(LLM_TENSOR_NEXTN_EH_PROJ, "weight", i), {n_embd, n_embd}, flags);
                             layer.nextn.embed_tokens = create_tensor(tn(LLM_TENSOR_NEXTN_EMBED_TOKENS, "weight", i), {n_vocab, n_embd}, flags);
                             layer.nextn.enorm = create_tensor(tn(LLM_TENSOR_NEXTN_ENORM, "weight", i), {n_embd}, flags);
@@ -13762,79 +13763,14 @@ struct llm_build_glm4 : public llm_graph_context {
             cb(inpL, "l_out", il);
         }
 
-        // Phase 2: NextN/MTP layers for multi-token prediction
-        ggml_tensor * mtp_output = inpL; // Default to transformer output
-        if (hparams.nextn_predict_layers > 0) {
-            // Process MTP/NextN layers for parallel token prediction
-            for (int il = n_transformer_layers; il < n_layer; ++il) {
-                const auto & nextn = model.layers[il].nextn;
-                
-                // Check if NextN tensors are available for this layer
-                if (nextn.eh_proj && nextn.shared_head_head) {
-                    // Process NextN layer for multi-token prediction
-                    
-                    // 1. Embedding projection (hidden state -> prediction space) 
-                    // For GLM4: eh_proj is {n_embd, n_embd}, standard matrix multiplication
-                    // Expected: mtp_output {batch, seq, n_embd} × eh_proj_T {n_embd, n_embd} = {batch, seq, n_embd}
-                    ggml_tensor * eh_proj_for_mul = nextn.eh_proj;
-                    
-                    // For standard GLM4, check if transpose is needed (should be {n_embd, n_embd})
-                    if (nextn.eh_proj->ne[0] == n_embd && nextn.eh_proj->ne[1] == n_embd) {
-                        // Standard GLM4: transpose to get correct dimensions for mul_mat and make it contiguous
-                        eh_proj_for_mul = ggml_cont(ctx0, ggml_transpose(ctx0, nextn.eh_proj));
-                        cb(eh_proj_for_mul, "nextn_eh_proj_transpose", il);
-                    }
-                    
-                    // Safety check: verify tensor dimensions are compatible before multiplication
-                    if (eh_proj_for_mul && mtp_output && 
-                        eh_proj_for_mul->ne[0] == mtp_output->ne[0]) {
-                        cur = ggml_mul_mat(ctx0, eh_proj_for_mul, mtp_output);
-                        cb(cur, "nextn_eh_proj", il);
-                        
-                        // 2. Input normalization  
-                        if (nextn.enorm) {
-                            cur = build_norm(cur, nextn.enorm, nullptr, LLM_NORM_RMS, il);
-                            cb(cur, "nextn_enorm", il);
-                        }
-                        
-                        // 3. Hidden state normalization (if present)
-                        if (nextn.hnorm) {
-                            cur = build_norm(cur, nextn.hnorm, nullptr, LLM_NORM_RMS, il);
-                            cb(cur, "nextn_hnorm", il);
-                        }
-                        
-                        // 4. Multi-token prediction head (predict multiple tokens in parallel)
-                        if (nextn.shared_head_head && cur && 
-                            nextn.shared_head_head->ne[0] == cur->ne[0]) {
-                            cur = ggml_mul_mat(ctx0, nextn.shared_head_head, cur);
-                            cb(cur, "nextn_shared_head", il);
-                            
-                            // 5. Shared head normalization (final layer norm before output)
-                            if (nextn.shared_head_norm) {
-                                cur = build_norm(cur, nextn.shared_head_norm, nullptr, LLM_NORM_RMS, il);
-                                cb(cur, "nextn_head_norm", il);
-                            }
-                            
-                            // Update mtp_output for potential next NextN layer
-                            mtp_output = cur;
-                            cb(mtp_output, "nextn_out", il);
-                        } else {
-                            // Dimension mismatch, skip this operation
-                            cb(mtp_output, "nextn_skip_head", il);
-                        }
-                    } else {
-                        // Dimension mismatch, skip this layer completely
-                        cb(mtp_output, "nextn_skip_proj", il);
-                    }
-                } else {
-                    // NextN tensors not available, skip this layer  
-                    cb(mtp_output, "nextn_skip", il);
-                }
-            }
-        }
+        // Phase 2: NextN/MTP layers for multi-token prediction (optimized)
+        auto mtp_cb = [this](ggml_tensor * cur, const char * name, int il) { cb(cur, name, il); };
+        ggml_tensor * mtp_output = llama_mtp::process_all_mtp_layers(ctx0, model, inpL, mtp_cb);
+        ggml_tensor * mtp_logits = (mtp_output != inpL) ? mtp_output : nullptr;
 
-        // Final norm
-        cur = build_norm(mtp_output,
+        // Final norm (use MTP output if available, otherwise use main transformer output)
+        ggml_tensor * final_input = mtp_output ? mtp_output : inpL;
+        cur = build_norm(final_input,
                 model.output_norm,
                 NULL,
                 LLM_NORM_RMS, -1);
@@ -13848,14 +13784,10 @@ struct llm_build_glm4 : public llm_graph_context {
         cb(cur, "result_output", -1);
         res->t_logits = cur;
 
-        // MTP logits: conditionally assign based on n_mtp flag
-        if (cparams.n_mtp > 1 && hparams.nextn_predict_layers > 0) {
-            // Use MTP output directly as additional logits after processing NextN layers
-            ggml_tensor * mtp_logits = build_norm(mtp_output, model.output_norm, NULL, LLM_NORM_RMS, -1);
-            mtp_logits = build_lora_mm(model.output, mtp_logits);
-            cb(mtp_logits, "result_mtp_output", -1);
+        // Expose MTP logits if produced
+        if (cparams.n_mtp > 1 && hparams.nextn_predict_layers > 0 && mtp_logits) {
             res->t_logits_mtp = mtp_logits;
-            ggml_build_forward_expand(gf, mtp_logits);
+            ggml_build_forward_expand(gf, res->t_logits_mtp);
         }
 
         ggml_build_forward_expand(gf, cur);
@@ -14005,79 +13937,14 @@ struct llm_build_glm4_moe : public llm_graph_context {
             inpL = cur;
         }
 
-        // Phase 2: NextN/MTP layers for multi-token prediction
-        ggml_tensor * mtp_output = inpL; // Default to transformer output
-        if (hparams.nextn_predict_layers > 0) {
-            // Process MTP/NextN layers for parallel token prediction
-            for (int il = n_transformer_layers; il < n_layer; ++il) {
-                const auto & nextn = model.layers[il].nextn;
-                
-                // Check if NextN tensors are available for this layer
-                if (nextn.eh_proj && nextn.shared_head_head) {
-                    // Process NextN layer for multi-token prediction
-                    
-                    // 1. Embedding projection (hidden state -> prediction space)
-                    // For GLM4_MOE: eh_proj is {2*n_embd, n_embd}, need to transpose for correct multiplication
-                    // Expected: mtp_output {batch, seq, n_embd} × eh_proj_T {n_embd, 2*n_embd} = {batch, seq, 2*n_embd}
-                    ggml_tensor * eh_proj_for_mul = nextn.eh_proj;
-                    
-                    // Check dimensions and transpose if needed for GLM4_MOE
-                    if (nextn.eh_proj->ne[0] == 2 * n_embd && nextn.eh_proj->ne[1] == n_embd) {
-                        // GLM4_MOE case: transpose the weight matrix and make it contiguous
-                        eh_proj_for_mul = ggml_cont(ctx0, ggml_transpose(ctx0, nextn.eh_proj));
-                        cb(eh_proj_for_mul, "nextn_eh_proj_transpose", il);
-                    }
-                    
-                    // Safety check: verify tensor dimensions are compatible before multiplication
-                    if (eh_proj_for_mul && mtp_output && 
-                        eh_proj_for_mul->ne[0] == mtp_output->ne[0]) {
-                        cur = ggml_mul_mat(ctx0, eh_proj_for_mul, mtp_output);
-                        cb(cur, "nextn_eh_proj", il);
-                        
-                        // 2. Input normalization  
-                        if (nextn.enorm) {
-                            cur = build_norm(cur, nextn.enorm, nullptr, LLM_NORM_RMS, il);
-                            cb(cur, "nextn_enorm", il);
-                        }
-                        
-                        // 3. Hidden state normalization (if present)
-                        if (nextn.hnorm) {
-                            cur = build_norm(cur, nextn.hnorm, nullptr, LLM_NORM_RMS, il);
-                            cb(cur, "nextn_hnorm", il);
-                        }
-                        
-                        // 4. Multi-token prediction head (predict multiple tokens in parallel)
-                        if (nextn.shared_head_head && cur && 
-                            nextn.shared_head_head->ne[0] == cur->ne[0]) {
-                            cur = ggml_mul_mat(ctx0, nextn.shared_head_head, cur);
-                            cb(cur, "nextn_shared_head", il);
-                            
-                            // 5. Shared head normalization (final layer norm before output)
-                            if (nextn.shared_head_norm) {
-                                cur = build_norm(cur, nextn.shared_head_norm, nullptr, LLM_NORM_RMS, il);
-                                cb(cur, "nextn_head_norm", il);
-                            }
-                            
-                            // Update mtp_output for potential next NextN layer
-                            mtp_output = cur;
-                            cb(mtp_output, "nextn_out", il);
-                        } else {
-                            // Dimension mismatch, skip this operation
-                            cb(mtp_output, "nextn_skip_head", il);
-                        }
-                    } else {
-                        // Dimension mismatch, skip this layer completely
-                        cb(mtp_output, "nextn_skip_proj", il);
-                    }
-                } else {
-                    // NextN tensors not available, skip this layer  
-                    cb(mtp_output, "nextn_skip", il);
-                }
-            }
-        }
-
-        cur = mtp_output;
-        cur = build_norm(cur, model.output_norm, NULL, LLM_NORM_RMS, -1);
+    // Phase 2: NextN/MTP layers for multi-token prediction (optimized)
+    auto mtp_cb = [this](ggml_tensor * cur, const char * name, int il) { cb(cur, name, il); };
+    ggml_tensor * mtp_output = llama_mtp::process_all_mtp_layers(ctx0, model, inpL, mtp_cb);
+    ggml_tensor * mtp_logits = (mtp_output != inpL) ? mtp_output : nullptr;
+        
+        // Final norm (use MTP output if available, otherwise use transformer output)
+        ggml_tensor * final_input = mtp_output ? mtp_output : inpL;
+        cur = build_norm(final_input, model.output_norm, NULL, LLM_NORM_RMS, -1);
 
         cb(cur, "result_norm", -1);
         res->t_embd = cur;
@@ -14088,157 +13955,18 @@ struct llm_build_glm4_moe : public llm_graph_context {
         cb(cur, "result_output", -1);
         res->t_logits = cur;
 
-        // MTP logits: conditionally assign based on n_mtp flag
-        if (cparams.n_mtp > 1 && hparams.nextn_predict_layers > 0) {
-            // Use MTP output directly as additional logits after processing NextN layers
-            ggml_tensor * mtp_logits = build_norm(mtp_output, model.output_norm, NULL, LLM_NORM_RMS, -1);
-            mtp_logits = build_lora_mm(model.output, mtp_logits);
-            cb(mtp_logits, "result_mtp_output", -1);
+        // Expose MTP logits if produced
+        if (cparams.n_mtp > 1 && hparams.nextn_predict_layers > 0 && mtp_logits) {
             res->t_logits_mtp = mtp_logits;
-            ggml_build_forward_expand(gf, mtp_logits);
+            ggml_build_forward_expand(gf, res->t_logits_mtp);
         }
 
         ggml_build_forward_expand(gf, cur);
     }
 };
 
-struct llm_build_glm4_moe_mtp : public llm_graph_context {
-    llm_build_glm4_moe_mtp(const llama_model & model, const llm_graph_params & params,
-        // For v0, let's rebuild the computational graph for every step + this mimics the vLLM impl parameterization
-        ggml_tensor * hidden_state_inp, llama_token last_token_id, int n_past
-    ) : llm_graph_context(params) {
-
-        const int64_t n_embd_head = hparams.n_embd_head_v;
-        GGML_ASSERT(n_embd_head == hparams.n_embd_head_k);
-
-        // Assuming a single MTP layer at the end
-        const int il = hparams.n_layer - 1;
-        const auto & mtp_layer = model.layers[il];
-
-        ggml_tensor * inp_pos = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, 1);
-        ggml_set_i32(inp_pos, n_past);
-        llm_graph_input_attn_no_cache * inp_attn = nullptr;
-
-        ggml_tensor * cur;
-
-        // get MTP embedding for last (conventionally sampled) token
-        ggml_tensor * inp_token_id = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, 1);
-        ggml_set_i32(inp_token_id, last_token_id);
-        ggml_tensor * token_emb = ggml_get_rows(ctx0, mtp_layer.nextn.embed_tokens, inp_token_id);
-        ggml_tensor * token_emb_norm = build_norm(token_emb, mtp_layer.nextn.enorm, NULL, LLM_NORM_RMS, il);
-
-        // vLLM l99  previous_hidden_states = self.hnorm(previous_hidden_states)
-        ggml_tensor * hidden_state_norm = build_norm(hidden_state_inp, mtp_layer.nextn.hnorm, NULL, LLM_NORM_RMS, il);
-
-        ggml_tensor * combined = ggml_concat(ctx0, token_emb_norm, hidden_state_norm, 0);  // torch.cat
-        cur = build_lora_mm(mtp_layer.nextn.eh_proj, combined);                            // eh_proj
-
-
-        // now proceed through last layer (skipped in main model)
-        ggml_tensor * inpSA = cur;
-
-        // Pre-attention norm for the MTP block
-        ggml_tensor* attn_inp = build_norm(cur, mtp_layer.attn_norm, NULL, LLM_NORM_RMS, il);
-
-        // self-attention
-        {
-            ggml_tensor * Qcur = build_lora_mm(mtp_layer.wq, attn_inp);
-            if (mtp_layer.bq) {
-                Qcur = ggml_add(ctx0, Qcur, mtp_layer.bq);
-            }
-            cb(Qcur, "Qcur", il);
-
-            ggml_tensor * Kcur = build_lora_mm(mtp_layer.wk, attn_inp);
-            if (mtp_layer.bk) {
-                Kcur = ggml_add(ctx0, Kcur, mtp_layer.bk);
-            }
-            cb(Kcur, "Kcur", il);
-
-            ggml_tensor * Vcur = build_lora_mm(mtp_layer.wv, attn_inp);
-            if (mtp_layer.bv) {
-                Vcur = ggml_add(ctx0, Vcur, mtp_layer.bv);
-            }
-            cb(Vcur, "Vcur", il);
-
-            Qcur = ggml_reshape_3d(ctx0, Qcur, n_embd_head, n_head, n_tokens);
-            Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens);
-            Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, n_head_kv, n_tokens);
-
-            // Apply Q/K norm if available (GLM-4.5 355B variant)
-            if (mtp_layer.attn_q_norm) {
-                Qcur = build_norm(Qcur, mtp_layer.attn_q_norm, NULL, LLM_NORM_RMS, il);
-                cb(Qcur, "Qcur_normed", il);
-            }
-            if (mtp_layer.attn_k_norm) {
-                Kcur = build_norm(Kcur, mtp_layer.attn_k_norm, NULL, LLM_NORM_RMS, il);
-                cb(Kcur, "Kcur_normed", il);
-            }
-
-            Qcur = ggml_rope_ext(
-                    ctx0, Qcur, inp_pos, nullptr,
-                    n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
-                    ext_factor, attn_factor, beta_fast, beta_slow
-                    );
-
-            Kcur = ggml_rope_ext(
-                    ctx0, Kcur, inp_pos, nullptr,
-                    n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
-                    ext_factor, attn_factor, beta_fast, beta_slow
-                    );
-
-            cb(Qcur, "Qcur", il);
-            cb(Kcur, "Kcur", il);
-            cb(Vcur, "Vcur", il);
-
-            cur = build_attn(inp_attn,
-                    mtp_layer.wo, NULL,
-                    Qcur, Kcur, Vcur, nullptr, nullptr, 1.0f/sqrtf(float(n_embd_head)), il);
-        }
-
-        ggml_tensor * ffn_inp = ggml_add(ctx0, cur, inpSA);
-
-        cur = build_norm(ffn_inp, mtp_layer.attn_post_norm, NULL, LLM_NORM_RMS, il);
-
-        // moe ffn for nextn block
-        {
-            // Process routed experts using existing MoE infrastructure
-            ggml_tensor * routed_out = build_moe_ffn(cur,
-                    mtp_layer.ffn_gate_inp,
-                    mtp_layer.ffn_up_exps,
-                    mtp_layer.ffn_gate_exps,
-                    mtp_layer.ffn_down_exps,
-                    mtp_layer.ffn_exp_probs_b,
-                    n_expert, n_expert_used,
-                    LLM_FFN_SILU, hparams.expert_weights_norm,
-                    true, hparams.expert_weights_scale,
-                    (llama_expert_gating_func_type) hparams.expert_gating_func,
-                    il);
-            cb(routed_out, "ffn_moe_out", il);
-
-            // Process shared expert on original input
-            ggml_tensor * shared_out = build_ffn(cur,
-                    mtp_layer.ffn_up_shexp,   NULL, NULL,
-                    mtp_layer.ffn_gate_shexp, NULL, NULL,
-                    mtp_layer.ffn_down_shexp, NULL, NULL,
-                    NULL,
-                    LLM_FFN_SILU, LLM_FFN_PAR, il);
-            cb(shared_out, "ffn_shexp_out", il);
-
-            // Final output: routed_output + shared_output
-            cur = ggml_add(ctx0, routed_out, shared_out);
-            cb(cur, "ffn_out", il);
-        }
-
-        cur = ggml_add(ctx0, cur, ffn_inp);
-
-        cur = build_norm(cur, mtp_layer.nextn.shared_head_norm, NULL, LLM_NORM_RMS, il);
-        cur = build_lora_mm(mtp_layer.nextn.shared_head_head, cur);
-
-        res->t_logits = cur;
-
-        ggml_build_forward_expand(gf, res->t_logits);
-    }
-};
+// NOTE: llm_build_glm4_moe_mtp has been removed and replaced with unified MTP processing
+// MTP processing is now handled by llama_mtp::process_all_mtp_layers in the main GLM4 builders
 
 struct llm_build_nemotron : public llm_graph_context {
     llm_build_nemotron(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
@@ -18837,14 +18565,13 @@ ggml_cgraph * llama_model::build_mtp_graph(const llm_graph_params& params,
     switch (arch) {
     case LLM_ARCH_GLM4_MOE:
     {
-        printf("step: '%d'\n", 56);
-        llm = std::make_unique<llm_build_glm4_moe_mtp>(*this, params, hidden_state_inp, last_token_id, n_past);
+        // Use standard GLM4 MoE builder with MTP processing integrated
+        llm = std::make_unique<llm_build_glm4_moe>(*this, params);
     } break;
     default:
         GGML_ABORT("fatal error");
     }
 
-    printf("step: '%d'\n", 57);
     return llm->res->get_gf();
 }
 
@@ -18859,8 +18586,6 @@ int32_t llama_model_n_nextn_layer(const llama_model * model) {
 
 ggml_cgraph * llama_build_mtp_graph(const llama_model * model, const llm_graph_params & params,
     ggml_tensor * hidden_state_inp, llama_token last_token_id, int n_past) {
-    printf("step: '%d'\n", 55);
-
     return model->build_mtp_graph(params, hidden_state_inp, last_token_id, n_past);
 }
 
