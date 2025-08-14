@@ -18560,6 +18560,11 @@ ggml_cgraph * llama_model::build_graph(const llm_graph_params & params) const {
 
 ggml_cgraph * llama_model::build_mtp_graph(const llm_graph_params& params,
     ggml_tensor* hidden_state_inp, llama_token last_token_id, int n_past) const {
+    // Suppress unused parameter warnings
+    (void)hidden_state_inp;
+    (void)last_token_id;
+    (void)n_past;
+    
     std::unique_ptr<llm_graph_context> llm;
 
     switch (arch) {

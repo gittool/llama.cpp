@@ -122,4 +122,40 @@ namespace llama_mtp_debug {
         void disable() { enabled = false; }
     };
     
+    // Check matrix multiplication compatibility for debugging
+    inline bool check_mul_mat_compatibility(const ggml_tensor* a, const ggml_tensor* b, bool verbose = false) {
+        if (!a || !b) {
+            if (verbose) std::cout << "❌ Null tensor in mul_mat check\n";
+            return false;
+        }
+        
+        // Basic dimension requirements for matrix multiplication: a[0] == b[0]
+        bool compatible = (a->ne[0] == b->ne[0]) && (a->ne[1] >= 1) && (b->ne[1] >= 1);
+        
+        if (verbose) {
+            std::cout << "Matrix multiplication compatibility check:\n";
+            std::cout << "  Tensor A: [" << a->ne[0] << ", " << a->ne[1] << ", " << a->ne[2] << ", " << a->ne[3] << "]\n";
+            std::cout << "  Tensor B: [" << b->ne[0] << ", " << b->ne[1] << ", " << b->ne[2] << ", " << b->ne[3] << "]\n";
+            std::cout << "  Compatible: " << (compatible ? "✅ Yes" : "❌ No") << "\n";
+        }
+        
+        return compatible;
+    }
+    
+    // Enhanced MTP layer dimension validation
+    inline void debug_mtp_layer_dimensions(const llama_layer_nextn & nextn, int layer_idx, int n_embd, bool verbose = true) {
+        if (!verbose) return;
+        
+        std::cout << "=== MTP Layer " << layer_idx << " Dimension Debug ===\n";
+        
+        if (nextn.eh_proj) {
+            std::cout << "eh_proj: [" << nextn.eh_proj->ne[0] << ", " << nextn.eh_proj->ne[1] << "]\n";
+        }
+        if (nextn.shared_head_head) {
+            std::cout << "shared_head: [" << nextn.shared_head_head->ne[0] << ", " << nextn.shared_head_head->ne[1] << "]\n";
+        }
+        std::cout << "Expected n_embd: " << n_embd << "\n";
+        std::cout << "==========================================\n";
+    }
+    
 } // namespace llama_mtp_debug

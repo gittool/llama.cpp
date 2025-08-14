@@ -30,13 +30,19 @@ namespace llama_mtp {
             return false;
         }
         
-        // Dimension validation
+        // Enhanced dimension validation
         if (nextn.eh_proj->ne[0] <= 0 || nextn.eh_proj->ne[1] <= 0 ||
             nextn.shared_head_head->ne[0] <= 0 || nextn.shared_head_head->ne[1] <= 0) {
             return false;
         }
         
-        // Additional consistency checks
+        // Check for reasonable dimension values
+        const int64_t max_dim = 32768; // Reasonable upper bound
+        if (nextn.eh_proj->ne[0] > max_dim || nextn.eh_proj->ne[1] > max_dim ||
+            nextn.shared_head_head->ne[0] > max_dim || nextn.shared_head_head->ne[1] > max_dim) {
+            return false;
+        }
+        
         return true;
     }
     
@@ -56,29 +62,43 @@ namespace llama_mtp {
         // 1. Optimized embedding projection with proper dimension handling
         ggml_tensor * projected = input;
         
-        // Handle different projection layouts (GLM4 vs GLM4_MOE)
+        // Debug information for troubleshooting
+        cb(input, "mtp_input", layer_idx);
+        
+        // Handle different projection layouts (GLM4 vs GLM4_MOE) with robust dimension checking
         if (nextn.eh_proj->ne[0] == n_embd && nextn.eh_proj->ne[1] == n_embd) {
             // Standard GLM4: transpose for correct multiplication
             ggml_tensor * weight_t = ggml_cont(ctx0, ggml_transpose(ctx0, nextn.eh_proj));
             cb(weight_t, "mtp_proj_t", layer_idx);
             
-            if (weight_t->ne[0] == input->ne[0]) {
+            // Enhanced dimension compatibility check
+            if (weight_t->ne[0] == input->ne[0] && weight_t->ne[1] >= 1 && input->ne[1] >= 1) {
                 projected = ggml_mul_mat(ctx0, weight_t, input);
                 cb(projected, "mtp_proj", layer_idx);
+            } else {
+                // Dimension mismatch - skip projection and log warning
+                cb(input, "mtp_proj_skip_dim_mismatch", layer_idx);
             }
         } else if (nextn.eh_proj->ne[0] == 2 * n_embd && nextn.eh_proj->ne[1] == n_embd) {
             // GLM4_MOE: transpose for correct multiplication
             ggml_tensor * weight_t = ggml_cont(ctx0, ggml_transpose(ctx0, nextn.eh_proj));
             cb(weight_t, "mtp_proj_t", layer_idx);
             
-            if (weight_t->ne[0] == input->ne[0]) {
+            // Enhanced dimension compatibility check for GLM4_MOE
+            if (weight_t->ne[0] == input->ne[0] && weight_t->ne[1] >= 1 && input->ne[1] >= 1) {
                 projected = ggml_mul_mat(ctx0, weight_t, input);
                 cb(projected, "mtp_proj", layer_idx);
+            } else {
+                // Dimension mismatch - skip projection
+                cb(input, "mtp_proj_moe_skip_dim_mismatch", layer_idx);
             }
-        } else if (nextn.eh_proj->ne[0] == input->ne[0]) {
-            // Direct multiplication if dimensions match
+        } else if (nextn.eh_proj->ne[0] == input->ne[0] && nextn.eh_proj->ne[1] >= 1 && input->ne[1] >= 1) {
+            // Direct multiplication with enhanced dimension checks
             projected = ggml_mul_mat(ctx0, nextn.eh_proj, input);
-            cb(projected, "mtp_proj", layer_idx);
+            cb(projected, "mtp_proj_direct", layer_idx);
+        } else {
+            // No compatible projection found - skip with warning
+            cb(input, "mtp_proj_skip_no_match", layer_idx);
         }
         
         // 2. Apply normalizations (optimized order)
@@ -111,8 +131,9 @@ namespace llama_mtp {
                 }
             }
             
-            // Apply prediction head
-            if (head_input->ne[0] == nextn.shared_head_head->ne[0]) {
+            // Apply prediction head with enhanced dimension checking
+            if (head_input->ne[0] == nextn.shared_head_head->ne[0] && 
+                nextn.shared_head_head->ne[1] >= 1 && head_input->ne[1] >= 1) {
                 predictions = ggml_mul_mat(ctx0, nextn.shared_head_head, head_input);
                 cb(predictions, "mtp_head", layer_idx);
                 
@@ -122,6 +143,9 @@ namespace llama_mtp {
                     predictions = ggml_mul(ctx0, predictions, nextn.shared_head_norm);
                     cb(predictions, "mtp_head_norm", layer_idx);
                 }
+            } else {
+                // Dimension mismatch for prediction head - skip
+                cb(head_input, "mtp_head_skip_dim_mismatch", layer_idx);
             }
         }
         
